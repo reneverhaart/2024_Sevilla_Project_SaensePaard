@@ -1,26 +1,29 @@
 import os
-from Database.structure import XMLData, Base
-from DataReader.DataRead_file import xml_to_sql
-from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, Table
+from datetime import datetime
+from Database.structure import SevillaTable, Base
+from DataReader.DataRead_file import xml_to_sql, emit_progress_update
+from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, Table, text, inspect
 from sqlalchemy.orm import sessionmaker
-import json
+from sqlalchemy.exc import IntegrityError
+import traceback
 
 engine = create_engine('sqlite:///saensepaard.db')
 Session = sessionmaker(bind=engine)
 session = Session()
-metadata = MetaData()
+metadata = MetaData()  # Keeps SQLite table definitions
+metadata.reflect(bind=engine)
 
 
-def init_db():
+def init_db(socketio):
     Base.metadata.create_all(engine)
 
     # Next code useable for loading initial databases
     xml_file_path = 'data/initial_database.json'
     if os.path.isfile(xml_file_path):
         with open(xml_file_path, 'r') as file:
-            xml_to_sql(xml_file_path)
+            xml_to_sql(xml_file_path, socketio, session)
 
-        #for data_ in data.get("words_data", []):
+        # for data_ in data.get("words_data", []):
         #    word = WordObject(word=word_data["word"], type=word_data["type"], weight=word_data["weight"])
         #    session.add(word)
 
@@ -29,22 +32,140 @@ def init_db():
         print(f"xml_file_path='{xml_file_path}' bestaat niet. Initialisatie wordt overgeslagen.")
 
 
-def make_table(xml_columns, title, created_date):
-    formatted_date = created_date.strftime("%Y%m%d_%H%M") # Extract date from created_date column
+def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, xml_columns, created_date):
+    # Voorbeeld van hoe je kolomnamen en datum kunt verkrijgen uit sev_file
+    title = sev_file.filename  # Voorbeeld titel
+    formatted_date = created_date.strftime("%Y%m%d_%H%M")
     table_name = f"{title}_{formatted_date}".replace(' ', '_').replace('.', '_')
 
-    # Make SQLite-table with found columns
-    table_columns = [Column('ID', Integer, primary_key=True)]  # Primary key
-    for column in xml_columns:
-        table_columns.append(Column(column, Text))
+    # Maak een MetaData object aan zonder bind
+    metadata = MetaData()
 
-    dynamic_table = Table(table_name, metadata, *table_columns)
+    # Define columns
+    columns = [Column('ID', Integer, primary_key=True)] + [Column(column, Text) for column in xml_columns]
 
-    # Creeer de tabel in de database
-    metadata.create_all(engine)
+    # Definieer de tabel
+    new_table = Table(table_name, metadata, *columns)
+
+    # Verkrijg de engine uit de session
+    engine = session.bind
+
+    # Controleer of de tabel al bestaat
+    if engine.dialect.has_table(engine, table_name):
+        print(f"Tabel '{table_name}' bestaat al.")
+        return f"Tabel '{table_name}' bestaat al."
+
+    try:
+        # Maak de nieuwe tabel aan
+        metadata.create_all(bind=engine)
+        print(f"Database tabel '{table_name}' is aangemaakt.")
+
+        # Voeg tabelinformatie toe aan de database
+        new_sevilla_table = SevillaTable(
+            title=table_name,
+            name=title,
+            upload_date=created_date
+        )
+
+        session.add(new_sevilla_table)
+        session.commit()
+
+        return f"Tabel '{table_name}' succesvol aangemaakt."
+
+    except IntegrityError as e:
+        session.rollback()
+        print(f"Fout bij het aanmaken van de tabel: {str(e)}")
+        return f"Fout bij het aanmaken van de tabel '{table_name}'."
+
+    except Exception as e:
+        session.rollback()
+        print(f"Onverwachte fout: {str(e)}")
+        return f"Onverwachte fout bij het aanmaken van de tabel '{table_name}'."
 
 
+def get_tables(session):
+    try:
+        # Query all tables from the database
+        tables = session.query(SevillaTable).all()
+        return tables
+    except Exception as e:
+        # Print the stack trace
+        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
+        print("".join(tb_str))
+        session.rollback()
+        return []
 
+
+def get_data_from_table(table_name, session):
+    # Dynamically get a table from the metadata
+    table = metadata.tables.get(table_name)
+    if table is None:
+        print(f"Tabel '{table_name}' bestaat niet.")
+        return False
+
+    try:
+        # Query all data from the table
+        query = session.query(table)
+        return query.all()
+    except Exception as e:
+        print(f"Fout bij verkrijgen data tabel='{table_name}': {e}")
+        session.rollback()
+        return False
+
+
+def query_database(table_name):
+    table = Table(table_name, metadata, autoload_with=engine)
+    with engine.connect() as connection:
+        try:
+            query = table.select()
+            result = connection.execute(query)
+            rows = result.fetchall()
+            columns = result.keys()
+            if not rows:
+                print(f"Geen gegevens gevonden in de tabel '{table_name}'.")
+
+                # Debugging
+                print(f"Columns: {columns}")
+                print(f"Rows: {rows}")
+            return columns, rows
+        except Exception as e:
+            print(f"Fout bij uitvoeren van query op tabel '{table_name}': {e}")
+            raise
+
+
+def insert_data(table_name, data):
+    from sqlalchemy import create_engine, Table
+    engine = create_engine('sqlite:///your_database.db')
+    metadata = MetaData()
+
+    table = Table(table_name, metadata, autoload_with=engine)
+    with engine.connect() as connection:
+        for item in data:
+            connection.execute(table.insert().values(item))
+
+
+def drop_old_duplicate_table(table_name):
+    # Zorg ervoor dat de metadata is gereflecteerd
+    metadata.reflect(bind=engine)
+
+    # Controleer of de tabel bestaat in de database
+    inspector = inspect(engine)
+    if table_name in inspector.get_table_names():
+        try:
+            # Verwijder de tabel uit de metadata en dan uit de database
+            table = metadata.tables.get(table_name)
+            if table:
+                table.drop(bind=engine)
+                print(f"Tabel '{table_name}' succesvol verwijderd.")
+            else:
+                print(f"Tabel '{table_name}' is niet gevonden in de metadata.")
+        except Exception as e:
+            print(f"Fout bij verwijderen van tabel '{table_name}': {e}")
+    else:
+        print(f"Tabel '{table_name}' bestaat niet in de database.")
+
+
+"""
 def post_magazine(magazine, session):
     try:
         existing_magazine = session.query(Magazine).filter_by(title=magazine.title).first()
@@ -199,3 +320,4 @@ def delete_word_with_type_wordlist(word, type, session):
         print(f"Error occurred: {e}")
         session.rollback()
         return False
+"""

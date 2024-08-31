@@ -1,34 +1,68 @@
 # Load corepackage extractor for xml
 import xml.etree.ElementTree as ET
 
+# Use dates
+from datetime import datetime
 
-def xml_to_sql(filepath):
-    # Database repository related import in function because of circular import issue
-    from Database.repository import make_table
 
-    # Load and parse the XML file
+def emit_progress_update(socketio, status, percentage):
+    socketio.emit('update_progress', {'status': status, 'percentage': percentage})
+
+
+def parse_date(date_str, date_format="%d-%m-%Y %H:%M:%S"):
+    # String to datetime parsing with format
+    try:
+        return datetime.strptime(date_str, date_format)
+    except ValueError:
+        print(f"Kan datum niet parsen: {date_str}")
+        return None
+
+
+def parse_xml(filepath):
     tree = ET.parse(filepath)
-
-    # Concept from https://stackoverflow.com/questions/58881041/store-xml-file-into-ms-sql-db-using-python
     root = tree.getroot()
 
-    # Print out the tag of the root and all child tags
-    print(root.tag)
-    for child in root:
-        print(child.tag, child.attrib)
+    # Extracting data from the <Contents> section
+    contents = root.find('Contents')
+    if contents is not None:
+        created_str = contents.find('Created').text
+        created_date = parse_date(created_str, "%d-%m-%Y %H:%M:%S")
+    else:
+        created_date = None
 
-    # Get all elements from XML
-    columns = set()
-    for elem in root.iter():
-        columns.update([child.tag for child in elem])
+    # Extracting data from the <Comp> section
+    comps = root.findall('Comp')
+    data = []
+    for comp in comps:
+        item = {elem.tag: elem.text for elem in comp}
+        data.append(item)
 
-    # Get <Created> and <FileName> values
-    created_elem = root.find('Created')
-    filename_elem = root.find('FileName')
+    # Sorting data by the 'Name' field
+    data_sorted = sorted(data, key=lambda x: x.get('Name', ''))
 
-    # For future: possible to check here if table already in database:
-    if created_elem and filename_elem:
+    return created_date, data_sorted
 
-        # Make SQLite-table from XML columns
-        table_title = make_table(columns, filename_elem, created_elem)
-        print(f"Database tabel '{table_title}' is aangemaakt.")
+
+def xml_to_sql(filepath, socketio, session):
+    # Import the necessary function inside the function to avoid circular import issues
+    from Database.repository import insert_data
+
+    # Parse the XML file to extract created_date and data
+    created_date, data = parse_xml(filepath)
+
+    if not data:
+        print("Geen gegevens gevonden in het XML-bestand.")
+        return
+
+    # Define the table name and columns based on the extracted data
+    sev_file = type('SevFile', (object,), {
+        'filename': os.path.basename(filepath)
+    })()  # Simplified structure to pass the filename
+
+    result = make_table(sev_file, socketio, session, sev_index=1, total_amount_sevs=1, xml_columns=data[0].keys(), created_date=created_date)
+    print(result)
+
+    # Insert data into the newly created table
+    if "succesvol aangemaakt" in result:
+        insert_data(sev_file.filename, data)
+

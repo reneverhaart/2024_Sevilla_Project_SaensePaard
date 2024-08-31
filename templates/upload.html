@@ -1,0 +1,151 @@
+{% extends "base_template.html" %}
+{% block content %}
+    <h1 class="mb-4">sev uploaden</h1>
+    <div style="padding: 20px; display: flex; justify-content: center; align-items: center;">
+        <div style="display: flex; flex-direction: row; width: 100%;">
+
+            <!-- Sev upload part -->
+            <div style="text-align: center; width: 40%;">
+                <h2 class="mb-4">sev upload</h2>
+                <form method="POST" action="/upload" enctype="multipart/form-data">
+                    <label for="sevFile" class="button-styling" style="margin-bottom: 5px;">Kies een bestand</label>
+                    <input type="file" name="sevFile" id="sevFile" accept=".sev" style="display: none;"
+                           onchange="displayFileName(this)" multiple>
+                    <div id="selectedFileBlock" style="display: none; width:100%;">
+                        <div id="fileNameDisplay" class="mt-2"></div>
+                    </div>
+                    <button type="submit" id="uploadButton" class="button-styling"
+                            style="display: none; margin-top:20px; border:0">Upload sev
+                    </button>
+                </form>
+                <p id="feedbackText" style="color: green;">{{ feedback }}</p>
+            </div>
+
+            <!-- Geüploade Sev's part -->
+            <div style="text-align: center; width: 60%;">
+                <h2 class="mt-4">Geüploade sev's</h2>
+                {% if sevs %}
+                    <table class="table" style="margin: auto;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #ddd; padding: 8px;">Titel</th>
+                                <th style="border: 1px solid #ddd; padding: 8px;">Publicatiedatum</th>
+                                <th style="border: 1px solid #ddd; padding: 8px;">Upload datum</th>
+                                <th style="border: 1px solid #ddd; padding: 8px;">Acties</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for sev in sevs %}
+                                <tr>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">{{ sev.title }}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">
+                                        {% if sev.upload_date is not none %}
+                                            {{ sev.upload_date.strftime('%d/%m/%Y') }}
+                                        {% else %}
+                                            onbekend
+                                        {% endif %}
+                                    </td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">
+                                        {% if sev.upload_date is not none %}
+                                            {{ sev.upload_date.strftime('%d/%m/%Y') }}
+                                        {% else %}
+                                            onbekend
+                                        {% endif %}
+                                    </td>
+                                    <td style="padding: 2px;">
+                                        <a href="{{ url_for('view_table', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
+                                        <form method="POST" action="/upload/delete" style="display: inline;" onsubmit="return confirmDelete()">
+                                            <input type="hidden" name="delete_sev_id" value="{{ sev.id }}">
+                                            <button type="submit" class="trash-button">&#128465;</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p>Er zijn nog geen sev's geüpload.</p>
+                {% endif %}
+            </div>
+        </div>
+        <div id="progress-container" style="display:none;">
+            <div id="progress-bar-container">
+                <div style="background: #f0f0f0; border-radius: 5px;">
+                    <div id="progress-bar"></div>
+                </div>
+                <div style="margin-top: 15px;" id="progress-text"></div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script src="{{ url_for('static', filename='socket.io.js') }}"></script>
+    <script>
+        const socket = io.connect('http://' + document.domain + ':' + location.port);
+
+        socket.on('update_progress', function (msg) {
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+
+            progressBar.style.width = msg.percentage + '%';
+            progressText.innerHTML = msg.status;
+
+            if (msg.percentage < 100) {
+                progressContainer.style.display = 'flex';
+            } else {
+                progressContainer.style.display = 'none';
+            }
+        });
+
+        function displayFileName(input) {
+            const files = input.files;
+            const fileBlock = document.getElementById("selectedFileBlock");
+            const fileNameDisplay = document.getElementById("fileNameDisplay");
+            const uploadButton = document.getElementById("uploadButton");
+            const feedbackText = document.getElementById("feedbackText");
+
+            // Clear previous file names
+            fileBlock.innerHTML = "";
+
+            // Check if files are selected
+            if (files.length > 0) {
+                // Display the file block
+                fileBlock.style.display = "inline-block";
+
+                // Loop through each selected file
+                for (let i = 0; i < files.length; i++) {
+                    const fileName = files[i].name;
+
+                    // Create a new element to display the file name
+                    const fileNameElement = document.createElement("div");
+                    fileNameElement.textContent = "Bestandsnaam " + (i + 1) + ": " + fileName;
+
+                    // Append the element to the file block
+                    fileBlock.appendChild(fileNameElement);
+                }
+
+                // Hide feedback text
+                feedbackText.style.display = "none";
+
+                // Display the upload button
+                uploadButton.style.display = "inline-block";
+            } else {
+                // Hide the file block if no files are selected
+                fileBlock.style.display = "none";
+
+                // Reset other elements
+                fileNameDisplay.innerHTML = "";
+                uploadButton.style.display = "none";
+
+                // Display feedback text
+                feedbackText.style.display = "inline-block";
+            }
+        }
+
+        function confirmDelete() {
+            const sevTitle = document.getElementById('sev_title').value;
+            return confirm(`Weet u zeker dat u het Sevillabestand '${sevTitle}' wilt verwijderen?`);
+        }
+    </script>
+{% endblock %}
