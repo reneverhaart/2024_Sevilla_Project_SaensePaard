@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import json
 
-engine = create_engine('sqlite:///physio1.db')
+engine = create_engine('sqlite:///saensepaard.db')
 Session = sessionmaker(bind=engine)
 session = Session()
 
