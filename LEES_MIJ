@@ -1,0 +1,11 @@
+Dit wordt de handleiding/richtpunten in dit project bij de code, voor overzichtelijkheid van programmeren.
+
+-"main.py" moet hierbij gerund worden met behulp van Flask om een SQLite database te initieren
+-benodigde packages van "requirements.txt" worden automatisch gedownload in "main.py":
+  =als er dus packages missen die gebruikt moeten worden, horen deze dan in "requirements.txt" te staan
+-overige scripts in "Scripts" zullen worden gebruikt door "main.py" en zal "main.py" dus indirect naar verwijzen
+-scripts die gebruikt worden voor het opzetten van de database en die "main.py" ook gebruikt, staan in "Database"
+-de app-routes ("@app.route("/123", methods=["POST", "GET"])") in "main.py", zijn de koppelingen van Flask
+  tussen de HTML-templates en Python functies die dus indirect de scripts gebruiken. Deze koppeling runt dus op
+   localhost en zal url "123" hierbij dan hebben met de mogelijkheid om te posten en te verkrijgen (="methods=["POST", "GET"])")
+-"DataReader" bevat de Python script die de file zal ontleden voor de database.

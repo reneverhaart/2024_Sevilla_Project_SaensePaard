@@ -40,6 +40,7 @@ if not os.path.isfile(app.config['DATABASE']):
 def home():
     return render_template('home.html')
 
+
 # @app.route("/a", methods=["POST", "GET"])
 # def a
 # @app.route("/b", methods=["POST", "GET"])

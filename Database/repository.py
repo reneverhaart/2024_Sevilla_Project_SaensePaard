@@ -1,25 +1,48 @@
-from Database.structure import
-from sqlalchemy import create_engine
+import os
+from Database.structure import XMLData, Base
+from DataReader.DataRead_file import xml_to_sql
+from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, Table
 from sqlalchemy.orm import sessionmaker
 import json
 
 engine = create_engine('sqlite:///saensepaard.db')
 Session = sessionmaker(bind=engine)
 session = Session()
+metadata = MetaData()
 
 
 def init_db():
     Base.metadata.create_all(engine)
 
     # Next code useable for loading initial databases
-    with open('data/initial_database.json', 'r') as file:
-        data = json.load(file)
+    xml_file_path = 'data/initial_database.json'
+    if os.path.isfile(xml_file_path):
+        with open(xml_file_path, 'r') as file:
+            xml_to_sql(xml_file_path)
 
-    for word_data in data.get("words_data", []):
-        word = WordObject(word=word_data["word"], type=word_data["type"], weight=word_data["weight"])
-        session.add(word)
+        #for data_ in data.get("words_data", []):
+        #    word = WordObject(word=word_data["word"], type=word_data["type"], weight=word_data["weight"])
+        #    session.add(word)
 
-    session.commit()
+        session.commit()
+    else:
+        print(f"xml_file_path='{xml_file_path}' bestaat niet. Initialisatie wordt overgeslagen.")
+
+
+def make_table(xml_columns, title, created_date):
+    formatted_date = created_date.strftime("%Y%m%d_%H%M") # Extract date from created_date column
+    table_name = f"{title}_{formatted_date}".replace(' ', '_').replace('.', '_')
+
+    # Make SQLite-table with found columns
+    table_columns = [Column('ID', Integer, primary_key=True)]  # Primary key
+    for column in xml_columns:
+        table_columns.append(Column(column, Text))
+
+    dynamic_table = Table(table_name, metadata, *table_columns)
+
+    # Creeer de tabel in de database
+    metadata.create_all(engine)
+
 
 
 def post_magazine(magazine, session):
