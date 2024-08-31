@@ -52,3 +52,6 @@ def home():
 # def e
 # @app.route("/f", methods=["POST", "GET"])
 # def f
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
