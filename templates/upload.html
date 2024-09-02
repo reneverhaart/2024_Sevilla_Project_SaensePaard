@@ -59,7 +59,7 @@
                                             {% endif %}
                                         </td>
                                         <td style="padding: 2px;">
-                                            <a href="{{ url_for('view_table', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
+                                            <a href="{{ url_for('view_data', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
                                             <form method="POST" action="/upload/delete" style="display: inline;" onsubmit="return confirmDelete()">
                                                 <input type="hidden" name="delete_sev_id" value="{{ sev.id }}">
                                                 <button type="submit" class="trash-button">&#128465;</button>

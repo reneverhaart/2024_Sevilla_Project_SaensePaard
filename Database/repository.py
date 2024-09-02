@@ -51,7 +51,7 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, create
         print(traceback.format_exc())
         return "Fout bij het aanmaken van de tabel.", 500
 
-    # Verwerk data om ongewenste waarden te verwijderen en special tekens te normaliseren
+    # Verwerk data om ongewenste waarden te verwijderen en speciale tekens te normaliseren
     data = {key: str(value).replace('\\', '/') if isinstance(value, str) else value for key, value in data.items()}
 
     for key, value in data.items():
@@ -137,15 +137,24 @@ def get_tables(session):
         return []
 
 
+def get_statistics_data(table_name, engine, column_name, query_value):
+    metadata = MetaData()
+    table = Table(table_name, metadata, autoload_with=engine)
+
+    # Construct a query to search within the specified column
+    query = select([table]).where(table.c[column_name].ilike(f'%{query_value}%'))
+
+    with engine.connect() as connection:
+        result = connection.execute(query)
+        return result.fetchall()
+
+
 def get_table_data(engine, table_name):
     try:
         with engine.connect() as conn:
             query = text(f'SELECT * FROM {table_name}')
-            print(f"Executing query: {query}")  # Voeg debug output toe
             result = conn.execute(query)
-            data = result.fetchall()
-            print(f"Retrieved data: {data}")  # Debug output voor de opgehaalde data
-            return data
+            return result.fetchall()
     except Exception as e:
         print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
         return None
@@ -170,6 +179,32 @@ def view_table(engine, table_name):
         for row in rows:
             print(row)
         print("\nEinde rijen van dynamic_table.")
+
+
+def search_across_tables(engine, column_name, query_value):
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+    results = []
+
+    # Iterate over all tables in the database
+    for table_name, table in metadata.tables.items():
+        if column_name in table.c:
+            # Construct a query to search within the specified column
+            stmt = select(table).where(table.c[column_name].ilike(f'%{query_value}%'))
+            with engine.connect() as connection:
+                result = connection.execute(stmt)
+                rows = result.fetchall()
+
+                # Convert each row to a dictionary using _asdict()
+                rows_dicts = [row._asdict() for row in rows]
+
+                if rows_dicts:
+                    results.append({
+                        'table_name': table_name,
+                        'rows': rows_dicts
+                    })
+
+    return results
 
 
 def query_database(table_name):

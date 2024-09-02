@@ -187,44 +187,86 @@ def flatten_data(data, parent_key='', sep='_'):
     return dict(items)
 
 
-@app.route("/view_table/<table_name>")
-def view_table(table_name):
+@app.route("/view_data/<table_name>")
+def view_data(table_name):
     try:
         from Database.repository import get_table_data
 
         # Verwijder speciale tekens of escape de naam als nodig
-        # Bijvoorbeeld: verplaats speciale tekens tussen dubbele aanhalingstekens
         sanitized_table_name = f'"{table_name}"'
 
         # Controleer of de tabelnaam veilig is en correct
         inspector = inspect(engine)
         tables = inspector.get_table_names()
 
-        # Verwijder dubbele aanhalingstekens om controle te maken
         clean_table_name = table_name.strip('"')
 
         if clean_table_name not in tables:
             return f"Tabel '{clean_table_name}' bestaat niet in de database.", 404
 
-        # Haal de data op van de repository
         rows = get_table_data(engine, sanitized_table_name)
         if not rows:
-            print(f"Geen gegevens gevonden voor tabel: {sanitized_table_name}")  # Debug output
             return f"Geen gegevens gevonden in de tabel '{table_name}'.", 404
 
-        # Haal de kolommen op uit de metadata
         metadata = MetaData()
-        # Gebruik de tabelnaam zonder extra aanhalingstekens voor SQLAlchemy
         table = Table(clean_table_name, metadata, autoload_with=engine)
         columns = table.columns.keys()
 
-        # Render de data in een template
-        return render_template('view_table.html', table_name=table_name, rows=rows, columns=columns)
+        return render_template('view_data.html', table_name=table_name, rows=rows, columns=columns)
 
     except Exception as e:
         tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))  # Traceback voor debugging
+        print("".join(tb_str))
         return f"Fout bij het ophalen van de tabel '{table_name}'.", 500
+
+
+@app.route("/view_statistics")
+def view_statistics():
+    table_name = request.args.get('table_name', '')  # Get the table name from the query parameters
+    query = request.args.get('query', '')
+
+    if not table_name:
+        return "Geen tabelnaam opgegeven.", 400
+    if not query:
+        return "Geen zoekterm opgegeven.", 400
+
+    try:
+        from Database.repository import get_statistics_data
+
+        # Verkrijg de statistieken voor de opgegeven zoekterm in de Comp kolom
+        statistics = get_statistics_data(table_name, engine, 'Comp', query)
+        if not statistics:
+            return f"Geen statistieken gevonden voor zoekterm '{query}' in tabel '{table_name}'.", 404
+
+        return render_template('view_statistics.html', table_name=table_name, statistics=statistics)
+
+    except Exception as e:
+        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
+        print("".join(tb_str))
+        return f"Fout bij het ophalen van statistieken voor '{query}' in tabel '{table_name}'.", 500
+
+
+@app.route("/search")
+def search():
+    query = request.args.get('query', '')
+
+    if not query:
+        return "Geen zoekterm opgegeven.", 400
+
+    try:
+        from Database.repository import search_across_tables
+
+        # Verkrijg de resultaten voor de opgegeven zoekterm
+        results = search_across_tables(engine, 'Comp', query)
+        if not results:
+            return f"Geen resultaten gevonden voor zoekterm '{query}'.", 404
+
+        return render_template('search_results.html', query=query, results=results)
+
+    except Exception as e:
+        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
+        print("".join(tb_str))
+        return f"Fout bij het ophalen van resultaten voor '{query}'.", 500
 
 
 # @app.route("/b", methods=["POST", "GET"])

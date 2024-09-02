@@ -1,27 +1,21 @@
 {% extends "base_template.html" %}
 
 {% block content %}
-    <h1>Tabel: {{ table_name }}</h1>
-
-    <!-- Knoppen om gegevens te bekijken -->
-    <div>
-        <form action="{{ url_for('view_data', table_name=table_name) }}" method="get">
-            <button type="submit">Bekijk Spelersdata</button>
-        </form>
-    </div>
-
+    <h1>Statistieken voor: {{ table_name }}</h1>
+    
+    <!-- Tabel met statistieken -->
     <table border="1">
         <thead>
             <tr>
-                {% for column in columns %}
+                {% for column in statistics[0].keys() %}
                     <th>{{ column }}</th>
                 {% endfor %}
             </tr>
         </thead>
         <tbody>
-            {% for row in rows %}
+            {% for row in statistics %}
                 <tr>
-                    {% for value in row %}
+                    {% for value in row.values() %}
                         <td>{{ value }}</td>
                     {% endfor %}
                 </tr>

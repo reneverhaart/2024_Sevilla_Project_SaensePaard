@@ -1,72 +1,54 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Titel hier</title>
+    <meta charset="UTF-8">
+    <title>{% block title %}My Application{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='stylesheet.css') }}">
 
     <script>
         // Set cursor to 'progress' when a form is submitted
         document.addEventListener('submit', function () {
-            document.documentElement.classList.add('progress')
+            document.documentElement.classList.add('progress');
         });
 
         // Change it back to the default cursor when the content is fully loaded
         document.addEventListener('DOMContentLoaded', function () {
-            document.documentElement.classList.remove('progress')
+            document.documentElement.classList.remove('progress');
         });
     </script>
 </head>
 <body>
-<aside id="sidebar" class="sidebar">
-    <ul class="sidebar-nav" id="sidebar-nav">
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/">
-                <i class="bi bi-person"></i>
-                <span>Home</span>
-            </a>
-        </li>
+    <aside id="sidebar" class="sidebar">
+        <ul class="sidebar-nav" id="sidebar-nav">
+            <li class="nav-item">
+                <a class="nav-link collapsed" href="/">
+                    <i class="bi bi-person"></i>
+                    <span>Home</span>
+                </a>
+            </li>
+            <!-- Other sidebar items here -->
+            <li class="nav-item">
+                <a class="nav-link collapsed" href="/a">
+                    <i class="bi bi-gear"></i>
+                    <span>a</span>
+                </a>
+            </li>
+            <!-- Add additional sidebar items as needed -->
+        </ul>
+    </aside>
 
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/a">
-                <i class="bi bi-gear"></i>
-                <span>a</span>
-            </a>
-        </li>
+    <main id="main" style="padding-left: 64px; padding-top: 0;">
+        <header>
+            <!-- Add the search form here -->
+            <form action="{{ url_for('search') }}" method="get" style="margin-bottom: 20px;">
+                <input type="text" name="query" placeholder="Voer zoekterm in" style="padding: 8px; font-size: 16px;">
+                <button type="submit" style="padding: 8px 16px; font-size: 16px;">Zoeken</button>
+            </form>
+        </header>
 
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/b">
-                <i class="bi bi-question-circle"></i>
-                <span>b</span>
-            </a>
-        </li>
+        {% block content %}{% endblock %}
+    </main>
 
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/c">
-                <i class="bi bi-question-circle"></i>
-                <span>c</span>
-            </a>
-        </li>
-
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/d">
-                <i class="bi bi-question-circle"></i>
-                <span>d</span>
-            </a>
-        </li>
-
-        <li class="nav-item">
-            <a class="nav-link collapsed" href="/e">
-                <i class="bi bi-question-circle"></i>
-                <span>e</span>
-            </a>
-        </li>
-    </ul>
-
-</aside>
-
-<main id="main" style="padding-left: 64px; padding-top: 0;">
-    {% block content %}{% endblock %}
-</main>
-{% block scripts %}{% endblock %}
+    {% block scripts %}{% endblock %}
 </body>
 </html>
