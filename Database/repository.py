@@ -1,335 +1,170 @@
 import os
-from datetime import datetime
 
+from sqlalchemy import create_engine, Column, Integer, String, Text, Table, inspect, MetaData, Inspector
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
-
-from Database.structure import SevillaTable, Base
-from DataReader.DataRead_file import xml_to_sql, emit_progress_update
-from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, Table, text, inspect
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from DataReader.DataRead_file import parse_xml
+from Database.structure import SevillaTable, Base
 import traceback
 
 engine = create_engine('sqlite:///saensepaard.db')
 Session = sessionmaker(bind=engine)
 session = Session()
-metadata = MetaData()  # Keeps SQLite table definitions
-metadata.reflect(bind=engine)
-Base = declarative_base()
 
 
+# Initieer de database zonder metadata
 def init_db(socketio):
-    Base.metadata.create_all(engine)
-
-    # Next code useable for loading initial databases
-    xml_file_path = 'data/initial_database.json'
-    if os.path.isfile(xml_file_path):
-        with open(xml_file_path, 'r') as file:
-            xml_to_sql(xml_file_path, socketio, session)
-
-        # for data_ in data.get("words_data", []):
-        #    word = WordObject(word=word_data["word"], type=word_data["type"], weight=word_data["weight"])
-        #    session.add(word)
-
-        session.commit()
-    else:
-        print(f"xml_file_path='{xml_file_path}' bestaat niet. Initialisatie wordt overgeslagen.")
+    # Creëer de SevillaTable
+    SevillaTable.__table__.create(bind=engine, checkfirst=True)
 
 
-def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, xml_columns, created_date):
-    # Voorbeeld van hoe je kolomnamen en datum kunt verkrijgen uit sev_file
-    title = sev_file.filename  # Voorbeeld titel
+def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, created_date, data):
+    print(f"Begin van data make_table() in repository.py:\n{data}\nEinde van data make_table() in repository.py.")
+    print(f"\ndata.keys() = {data.keys()}")
+    print(f"\ndata.values() = {data.values()}")
+
+    title = sev_file.filename
     formatted_date = created_date.strftime("%Y%m%d_%H%M")
     table_name = f"{title}_{formatted_date}".replace(' ', '_').replace('.', '_')
+    print(f"table_name={table_name}")
 
-    # Maak een MetaData object aan zonder bind
+    if not data:
+        return "Geen gegevens gevonden in het XML-bestand.", 400
+
+    # Als data een enkele dictionary is
+    if isinstance(data, dict):
+        data = [data]
+
+    if not isinstance(data, list) or not all(isinstance(record, dict) for record in data):
+        return "Onverwacht formaat van de gegevens. Verwacht een lijst van dictionaries.", 400
+
+    columns = [Column('id_tabelnummer', Integer, primary_key=True)]
+    column_types = {}
+    print(f"columns={columns}")
+
+    # Verkrijg kolomnamen en types op basis van een voorbeeld record
+    if data:
+        example_record = data[0]
+        for column_name in example_record.keys():
+            column_name = column_name.strip().upper()
+            value = example_record.get(column_name)
+
+            # Bepaal het type van de kolom
+            if isinstance(value, str):
+                column_types[column_name] = Text
+            elif isinstance(value, int):
+                column_types[column_name] = Integer
+            else:
+                column_types[column_name] = String
+
+    print("Starten met lokale MetaData voor dynamische kolommen...")
     metadata = MetaData()
-
-    # Define columns
-    columns = [Column('ID', Integer, primary_key=True)] + [Column(column, Text) for column in xml_columns]
-
-    # Definieer de tabel
-    new_table = Table(table_name, metadata, *columns)
-
-    # Verkrijg de engine uit de session
-    engine = session.bind
-
-    # Verwijder oude tabel als deze bestaat
-    if engine.dialect.has_table(engine, table_name):
-        try:
-            # Verwijder de oude tabel
-            new_table.drop(engine)
-            print(f"Tabel '{table_name}' succesvol verwijderd.")
-        except Exception as e:
-            print(f"Fout bij verwijderen van tabel '{table_name}': {e}")
-            return f"Fout bij verwijderen van tabel '{table_name}': {e}"
+    columns.extend(Column(name, type_) for name, type_ in column_types.items())
+    engine = create_engine('sqlite:///saensepaard.db')
+    dynamic_table = Table(table_name, metadata, *columns)
+    print(f"Geëxtraheerde kolommen: {columns}")
+    print(f"Geëxtraheerde kolomtypes: {column_types}")
 
     try:
-        # Maak de nieuwe tabel aan
-        metadata.create_all(bind=engine)
-        print(f"Database tabel '{table_name}' is aangemaakt.")
+        metadata.create_all(engine)
+        print(f"Tabel '{table_name}' succesvol aangemaakt.")
+    except SQLAlchemyError as e:
+        print(f"Fout bij het aanmaken van de tabel: {e}")
+        print(traceback.format_exc())
+        return "Fout bij het aanmaken van de tabel.", 500
 
-        # Voeg tabelinformatie toe aan de database
+    try:
+        values_list = []
+        for record in data:
+            if isinstance(record, dict):
+                values = {col: record.get(col, None) for col in column_types.keys()}
+                print(f"Record values: {values}")
+                values_list.append(values)
+            else:
+                print(f"Waarschuwing: Onverwacht recordtype: {type(record)}. Record: {record}")
+
+        with engine.connect() as conn:
+            conn.execute(dynamic_table.insert(), values_list)
+            print(f"Gegevens succesvol toegevoegd aan de tabel '{table_name}'.")
+    except SQLAlchemyError as e:
+        print(f"Fout bij het invoegen van gegevens: {e}")
+        print(traceback.format_exc())
+        return "Fout bij het invoegen van gegevens.", 500
+
+    try:
         new_sevilla_table = SevillaTable(
             title=table_name,
             name=title,
             upload_date=created_date
         )
-
         session.add(new_sevilla_table)
         session.commit()
-
-        return f"Tabel '{table_name}' succesvol aangemaakt."
-
-    except IntegrityError as e:
+        print(f"Nieuwe tabel '{table_name}' toegevoegd aan SevillaTable.")
+        return f"Tabel '{table_name}' succesvol aangemaakt en gevuld.", 200
+    except SQLAlchemyError as e:
+        print(f"Fout bij het toevoegen van de tabel aan SevillaTable: {e}")
+        print(traceback.format_exc())
         session.rollback()
-        print(f"Fout bij het aanmaken van de tabel: {str(e)}")
-        return f"Fout bij het aanmaken van de tabel '{table_name}'."
+        return "Fout bij het toevoegen van de tabel aan SevillaTable.", 500
 
+
+def drop_old_duplicate_table(engine, table_name):
+    """Verwijder een oude tabel met dezelfde naam als 'table_name' als deze bestaat."""
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+
+    if table_name in metadata.tables:
+        table = metadata.tables[table_name]
+        try:
+            # Verwijder de tabel
+            with engine.connect() as conn:
+                conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            print(f"Tabel '{table_name}' succesvol verwijderd.")
+        except SQLAlchemyError as e:
+            print(f"Fout bij het verwijderen van de tabel '{table_name}': {e}")
+            return f"Fout bij het verwijderen van de tabel '{table_name}'.", 500
+    else:
+        print(f"Tabel '{table_name}' bestaat niet.")
+        return f"Tabel '{table_name}' bestaat niet.", 404
+
+
+def delete_old_file(file_path):
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Bestand '{file_path}' succesvol verwijderd.")
+        else:
+            print(f"Bestand '{file_path}' bestaat niet.")
     except Exception as e:
-        session.rollback()
-        print(f"Onverwachte fout: {str(e)}")
-        return f"Onverwachte fout bij het aanmaken van de tabel '{table_name}'."
+        print(f"Fout bij het verwijderen van bestand '{file_path}': {e}")
+        raise
 
 
 def get_tables(session):
     try:
-        # Query all tables from the database
-        tables = session.query(SevillaTable).all()
-        return tables
-    except Exception as e:
-        # Print the stack trace
-        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))
-        session.rollback()
+        # Haal alle SevillaTable records op
+        return session.query(SevillaTable).all()
+    except SQLAlchemyError as e:
+        print(f"Fout bij het ophalen van tabellen: {e}")
         return []
 
 
-def get_data_from_table(table_name, session):
-    # Dynamically get a table from the metadata
-    table = metadata.tables.get(table_name)
-    if table is None:
-        print(f"Tabel '{table_name}' bestaat niet.")
-        return False
-
-    try:
-        # Query all data from the table
-        query = session.query(table)
-        return query.all()
-    except Exception as e:
-        print(f"Fout bij verkrijgen data tabel='{table_name}': {e}")
-        session.rollback()
-        return False
-
-
 def query_database(table_name):
-    table = Table(table_name, metadata, autoload_with=engine)
-    with engine.connect() as connection:
-        try:
-            query = table.select()
-            result = connection.execute(query)
-            rows = result.fetchall()
-            columns = result.keys()
-            if not rows:
-                print(f"Geen gegevens gevonden in de tabel '{table_name}'.")
-
-                # Debugging
-                print(f"Columns: {columns}")
-                print(f"Rows: {rows}")
-            return columns, rows
-        except Exception as e:
-            print(f"Fout bij uitvoeren van query op tabel '{table_name}': {e}")
-            raise
-
-
-def insert_data(table_name, data):
-    from sqlalchemy import create_engine, Table
-    engine = create_engine('sqlite:///your_database.db')
-    metadata = MetaData()
-
-    table = Table(table_name, metadata, autoload_with=engine)
-    with engine.connect() as connection:
-        for item in data:
-            connection.execute(table.insert().values(item))
-
-
-def drop_old_duplicate_table(table_name, engine):
-    # Verwijder oude tabel als deze bestaat
-    metadata = MetaData()
-    table = Table(table_name, metadata, autoload_with=engine)
-    if engine.dialect.has_table(engine, table_name):
-        try:
-            table.drop(engine)
-            print(f"Tabel '{table_name}' succesvol verwijderd.")
-        except Exception as e:
-            print(f"Fout bij verwijderen van tabel '{table_name}': {e}")
-    else:
-        print(f"Tabel '{table_name}' bestaat niet en hoeft niet verwijderd te worden.")
-
-
-def delete_old_file(file_path):
-    # Verwijder het oude bestand uit de uploadmap
-    if os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            print(f"Bestand '{file_path}' succesvol verwijderd.")
-        except OSError as e:
-            print(f"Fout bij verwijderen van bestand '{file_path}': {e}")
-
-
-"""
-def post_magazine(magazine, session):
     try:
-        existing_magazine = session.query(Magazine).filter_by(title=magazine.title).first()
+        # Haal kolommen op via inspect
+        inspector = inspect(session.bind)
+        if not inspector.has_table(table_name):
+            return None, None
 
-        if existing_magazine:
-            existing_magazine.publication_date = magazine.publication_date
-            existing_magazine.upload_date = magazine.upload_date
-            existing_magazine.title = magazine.title
-            existing_magazine.complexity_score = magazine.complexity_score
-            existing_magazine.reductionistic_score = magazine.reductionistic_score
-            session.commit()
-            return existing_magazine
-        else:
-            # Add new page
-            session.add(magazine)
-            session.commit()
-            return magazine
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()  # Roll back changes in case of an error
-        return False
+        columns = [column['name'] for column in inspector.get_columns(table_name)]
 
+        # Voer een ruwe SQL-query uit om alle rijen op te halen
+        result = session.execute(f"SELECT * FROM {table_name}").fetchall()
+        rows = [dict(row) for row in result]
 
-def post_page(page, session):
-    try:
-        existing_page = get_page_by_magazine_id_and_page_number(page.magazine_id, page.page_number, session)
-
-        if existing_page:
-            existing_page.text = page.text
-            existing_page.complexity_score = page.complexity_score
-            session.commit()
-            return existing_page
-        else:
-            # Add new page
-            session.add(page)
-            session.commit()
-            return page
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()  # Roll back changes in case of an error
-        return False
-
-
-def get_magazines(session):
-    try:
-        all_magazines = session.query(Magazine).all()
-        return all_magazines
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-
-
-def get_magazine_by_id(magazine_id, session):
-    try:
-        magazine = session.query(Magazine).filter(Magazine.id == magazine_id).first()
-        return magazine
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        return None
-
-
-def get_pages_by_magazine_id(magazine_id, session):
-    try:
-        pages = session.query(Page).filter(Page.magazine_id == magazine_id).all()
-        return pages
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        return None
-
-
-def get_page_by_magazine_id_and_page_number(magazine_id, page_number, session):
-    try:
-        page = session.query(Page).filter(Page.magazine_id == magazine_id, Page.page_number == page_number).first()
-        return page
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        return None
-
-
-def delete_page(magazine_id, page_number, session):
-    try:
-        page = session.query(Page).filter(Page.magazine_id == magazine_id, Page.page_number == page_number).first()
-        if page:
-            session.delete(page)
-            session.commit()
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-
-
-def delete_magazine_by_magazine_id(magazine_id, session):
-    try:
-        magazine = session.query(Magazine).filter(Magazine.id == magazine_id).first()
-        if magazine:
-            # Delete associated pages aswell
-            session.query(Page).filter(Page.magazine_id == magazine_id).delete()
-            session.delete(magazine)
-
-            session.commit()
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-
-
-def add_word_object_wordlist(word_object, session):
-    try:
-        existing_word_object = session.query(WordObject).filter(WordObject.word == word_object.word,
-                                                                WordObject.type == word_object.type).first()
-        if existing_word_object:
-            existing_word_object.weight = word_object.weight
-            session.commit()
-            return True
-        else:
-            session.add(word_object)
-            session.commit()
-            return True
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-
-
-def get_word_objects_by_type_wordlist(type, session):
-    try:
-        words_objects = session.query(WordObject).filter(WordObject.type == type).all()
-        return words_objects
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-
-
-def delete_word_with_type_wordlist(word, type, session):
-    try:
-        word_object = session.query(WordObject).filter(WordObject.word == word, WordObject.type == type).first()
-        if word_object:
-            session.delete(word_object)
-            session.commit()
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        session.rollback()
-        return False
-"""
+        return rows, columns
+    except SQLAlchemyError as e:
+        print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
+        return None, None

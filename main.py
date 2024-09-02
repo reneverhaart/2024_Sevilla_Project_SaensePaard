@@ -3,6 +3,8 @@ import subprocess
 import sys
 import traceback
 
+from sqlalchemy import MetaData
+
 
 # Function to download missing packages, needs to be at start of code:
 def install_packages():
@@ -22,8 +24,8 @@ from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 
 # Repository related imports
-from Database.repository import init_db, session, make_table, get_tables, drop_old_duplicate_table, metadata, engine, \
-    query_database, delete_old_file
+from Database.repository import init_db, session, make_table, drop_old_duplicate_table, delete_old_file, get_tables, \
+    query_database
 from Database.structure import SevillaTable
 
 # Data-reading related imports
@@ -47,8 +49,12 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+metadata = MetaData()
+metadata.clear()
+
 
 ### STARTING APP ROUTES ###
+
 
 @app.route("/")
 def home():
@@ -107,8 +113,8 @@ def upload():
                     session=session,
                     sev_index=sev_index + 1,  # Geef de huidige index door
                     total_amount_sevs=total_amount_sevs,
-                    xml_columns=list(data.keys()),  # Geef de kolommen door
-                    created_date=created_date  # Geef de aangemaakte datum door
+                    created_date=created_date,  # Geef de aangemaakte datum door
+                    data=data
                 )
 
         # Verkrijg de tabelinformatie na verwerking van bestanden
