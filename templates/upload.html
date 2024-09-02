@@ -2,76 +2,77 @@
 {% block content %}
     <h1 class="mb-4">sev uploaden</h1>
     <div style="padding: 20px; display: flex; justify-content: center; align-items: center;">
-        <div style="display: flex; flex-direction: row; width: 100%;">
+        <div class="slider-container">
+            <div class="slider-content">
+                <!-- Sev upload part -->
+                <div class="slider-item" style="width: 40%;">
+                    <h2 class="mb-4">sev upload</h2>
+                    <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
+                        <label for="sevFile" class="button-styling" style="margin-bottom: 5px;">Kies een bestand</label>
+                        <input type="file" name="sevFile" id="sevFile" accept=".sev" style="display: none;"
+                               onchange="displayFileName(this)" multiple>
+                        <div id="selectedFileBlock" style="display: none; width:100%;">
+                            <div id="fileNameDisplay" class="mt-2"></div>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <label>
+                                <input type="checkbox" name="deleteFile" value="true">
+                                Oude bestanden verwijderen
+                            </label>
+                        </div>
+                        <button type="submit" id="uploadButton" class="button-styling"
+                                style="display: none; margin-top:20px; border:0">Upload sev
+                        </button>
+                    </form>
+                    <p id="feedbackText" style="color: green;">{{ feedback }}</p>
+                </div>
 
-            <!-- Sev upload part -->
-            <div style="text-align: center; width: 40%;">
-                <h2 class="mb-4">sev upload</h2>
-                <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
-                    <label for="sevFile" class="button-styling" style="margin-bottom: 5px;">Kies een bestand</label>
-                    <input type="file" name="sevFile" id="sevFile" accept=".sev" style="display: none;"
-                           onchange="displayFileName(this)" multiple>
-                    <div id="selectedFileBlock" style="display: none; width:100%;">
-                        <div id="fileNameDisplay" class="mt-2"></div>
-                    </div>
-                    <div style="margin-top: 10px;">
-                        <label>
-                            <input type="checkbox" name="deleteFile" value="true">
-                            Oude bestanden verwijderen
-                        </label>
-                    </div>
-                    <button type="submit" id="uploadButton" class="button-styling"
-                            style="display: none; margin-top:20px; border:0">Upload sev
-                    </button>
-                </form>
-                <p id="feedbackText" style="color: green;">{{ feedback }}</p>
-            </div>
-
-            <!-- Geüploade Sev's part -->
-            <div style="text-align: center; width: 60%;">
-                <h2 class="mt-4">Geüploade sev's</h2>
-                {% if sevs %}
-                    <table class="table" style="margin: auto;">
-                        <thead>
-                            <tr>
-                                <th style="border: 1px solid #ddd; padding: 8px;">Titel</th>
-                                <th style="border: 1px solid #ddd; padding: 8px;">Publicatiedatum</th>
-                                <th style="border: 1px solid #ddd; padding: 8px;">Upload datum</th>
-                                <th style="border: 1px solid #ddd; padding: 8px;">Acties</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for sev in sevs %}
+                <!-- Geüploade Sev's part -->
+                <div class="slider-item" style="width: 60%;">
+                    <h2 class="mt-4">Geüploade sev's</h2>
+                    {% if sevs %}
+                        <table class="table" style="margin: auto;">
+                            <thead>
                                 <tr>
-                                    <td style="border: 1px solid #ddd; padding: 8px;">{{ sev.title }}</td>
-                                    <td style="border: 1px solid #ddd; padding: 8px;">
-                                        {% if sev.upload_date %}
-                                            {{ sev.upload_date.strftime('%d/%m/%Y') }}
-                                        {% else %}
-                                            onbekend
-                                        {% endif %}
-                                    </td>
-                                    <td style="border: 1px solid #ddd; padding: 8px;">
-                                        {% if sev.upload_date %}
-                                            {{ sev.upload_date.strftime('%d/%m/%Y') }}
-                                        {% else %}
-                                            onbekend
-                                        {% endif %}
-                                    </td>
-                                    <td style="padding: 2px;">
-                                        <a href="{{ url_for('view_table', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
-                                        <form method="POST" action="/upload/delete" style="display: inline;" onsubmit="return confirmDelete()">
-                                            <input type="hidden" name="delete_sev_id" value="{{ sev.id }}">
-                                            <button type="submit" class="trash-button">&#128465;</button>
-                                        </form>
-                                    </td>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Titel</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Publicatiedatum</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Upload datum</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Acties</th>
                                 </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                {% else %}
-                    <p>Er zijn nog geen sev's geüpload.</p>
-                {% endif %}
+                            </thead>
+                            <tbody>
+                                {% for sev in sevs %}
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">{{ sev.title }}</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">
+                                            {% if sev.upload_date %}
+                                                {{ sev.upload_date.strftime('%d/%m/%Y') }}
+                                            {% else %}
+                                                onbekend
+                                            {% endif %}
+                                        </td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">
+                                            {% if sev.upload_date %}
+                                                {{ sev.upload_date.strftime('%d/%m/%Y') }}
+                                            {% else %}
+                                                onbekend
+                                            {% endif %}
+                                        </td>
+                                        <td style="padding: 2px;">
+                                            <a href="{{ url_for('view_table', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
+                                            <form method="POST" action="/upload/delete" style="display: inline;" onsubmit="return confirmDelete()">
+                                                <input type="hidden" name="delete_sev_id" value="{{ sev.id }}">
+                                                <button type="submit" class="trash-button">&#128465;</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% else %}
+                        <p>Er zijn nog geen sev's geüpload.</p>
+                    {% endif %}
+                </div>
             </div>
         </div>
         <div id="progress-container" style="display:none;">

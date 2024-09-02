@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, Table, inspect, MetaData, Inspector
+from sqlalchemy import create_engine, Column, Integer, String, Text, Table, inspect, MetaData, Inspector, text, select
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -33,39 +33,15 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, create
     if not data:
         return "Geen gegevens gevonden in het XML-bestand.", 400
 
-    # Als data een enkele dictionary is
-    if isinstance(data, dict):
-        data = [data]
+    columns = [Column('unique_row_id', Integer, primary_key=True)]
+    columns.extend(Column(key, Text) for key in data.keys())  # Gebruik Text voor grotere tekstkolommen
 
-    if not isinstance(data, list) or not all(isinstance(record, dict) for record in data):
-        return "Onverwacht formaat van de gegevens. Verwacht een lijst van dictionaries.", 400
-
-    columns = [Column('id_tabelnummer', Integer, primary_key=True)]
-    column_types = {}
-    print(f"columns={columns}")
-
-    # Verkrijg kolomnamen en types op basis van een voorbeeld record
-    if data:
-        example_record = data[0]
-        for column_name in example_record.keys():
-            column_name = column_name.strip().upper()
-            value = example_record.get(column_name)
-
-            # Bepaal het type van de kolom
-            if isinstance(value, str):
-                column_types[column_name] = Text
-            elif isinstance(value, int):
-                column_types[column_name] = Integer
-            else:
-                column_types[column_name] = String
-
+    print(f"Initial columns={columns}")
     print("Starten met lokale MetaData voor dynamische kolommen...")
+
     metadata = MetaData()
-    columns.extend(Column(name, type_) for name, type_ in column_types.items())
     engine = create_engine('sqlite:///saensepaard.db')
-    dynamic_table = Table(table_name, metadata, *columns)
-    print(f"Geëxtraheerde kolommen: {columns}")
-    print(f"Geëxtraheerde kolomtypes: {column_types}")
+    dynamic_table = Table(table_name, metadata, *columns, extend_existing=True)
 
     try:
         metadata.create_all(engine)
@@ -75,19 +51,29 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, create
         print(traceback.format_exc())
         return "Fout bij het aanmaken van de tabel.", 500
 
-    try:
-        values_list = []
-        for record in data:
-            if isinstance(record, dict):
-                values = {col: record.get(col, None) for col in column_types.keys()}
-                print(f"Record values: {values}")
-                values_list.append(values)
-            else:
-                print(f"Waarschuwing: Onverwacht recordtype: {type(record)}. Record: {record}")
+    # Verwerk data om ongewenste waarden te verwijderen en special tekens te normaliseren
+    data = {key: str(value).replace('\\', '/') if isinstance(value, str) else value for key, value in data.items()}
 
+    for key, value in data.items():
+        if not isinstance(value, (str, int, float, bytes)):
+            print(f"make_table(): waarde van key={key} heeft een niet-ondersteund type: {type(value)}")
+            data[key] = str(value)  # Converteer niet-ondersteunde types naar string
+
+    try:
         with engine.connect() as conn:
-            conn.execute(dynamic_table.insert(), values_list)
-            print(f"Gegevens succesvol toegevoegd aan de tabel '{table_name}'.")
+            print(f"Data om in te voegen met engine.connect(): {data}")
+
+            insert_statement = dynamic_table.insert().values(data)
+            print(f"Uitgevoerde query: {insert_statement}")
+            print(f"Parameters: {data}")
+
+            conn.execute(insert_statement)
+            conn.commit()
+            print(f"Gegevens succesvol ingevoegd in de dynamische tabel '{table_name}'.")
+
+            # Bekijk gemaakte dynamic_table in database
+            view_table(engine, table_name)
+
     except SQLAlchemyError as e:
         print(f"Fout bij het invoegen van gegevens: {e}")
         print(traceback.format_exc())
@@ -149,6 +135,41 @@ def get_tables(session):
     except SQLAlchemyError as e:
         print(f"Fout bij het ophalen van tabellen: {e}")
         return []
+
+
+def get_table_data(engine, table_name):
+    try:
+        with engine.connect() as conn:
+            query = text(f'SELECT * FROM {table_name}')
+            print(f"Executing query: {query}")  # Voeg debug output toe
+            result = conn.execute(query)
+            data = result.fetchall()
+            print(f"Retrieved data: {data}")  # Debug output voor de opgehaalde data
+            return data
+    except Exception as e:
+        print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
+        return None
+
+
+def view_table(engine, table_name):
+    metadata = MetaData()
+    dynamic_table = Table(table_name, metadata, autoload_with=engine)
+
+    with engine.connect() as conn:
+        query = select(dynamic_table)
+        print(f"Executing query: {query}")
+        result = conn.execute(query)
+        rows = result.fetchall()
+
+        # Print kolomnamen
+        column_names = dynamic_table.columns.keys()
+        print(f"Kolomnamen dynamic_table volgens view_table: {column_names}")
+
+        # Print gegevens
+        print("\nRijen van dynamic_table:")
+        for row in rows:
+            print(row)
+        print("\nEinde rijen van dynamic_table.")
 
 
 def query_database(table_name):

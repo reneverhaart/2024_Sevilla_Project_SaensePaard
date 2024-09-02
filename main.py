@@ -3,7 +3,7 @@ import subprocess
 import sys
 import traceback
 
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, Table, inspect
 
 
 # Function to download missing packages, needs to be at start of code:
@@ -25,7 +25,7 @@ from flask_socketio import SocketIO
 
 # Repository related imports
 from Database.repository import init_db, session, make_table, drop_old_duplicate_table, delete_old_file, get_tables, \
-    query_database
+    query_database, engine
 from Database.structure import SevillaTable
 
 # Data-reading related imports
@@ -170,22 +170,60 @@ def delete_old_sev_file():
     return render_template('upload.html', feedback=feedback, sevs=all_sevs)
 
 
+def flatten_data(data, parent_key='', sep='_'):
+    """
+    Flatten the nested dictionary structure into a single-level dictionary.
+    """
+    items = []
+    for k, v in data.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_data(v, new_key, sep=sep).items())
+        elif isinstance(v, list):
+            for i, sub_v in enumerate(v):
+                items.extend(flatten_data(sub_v, f"{new_key}{sep}{i}", sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
 @app.route("/view_table/<table_name>")
 def view_table(table_name):
     try:
-        rows, columns = query_database(table_name)
+        from Database.repository import get_table_data
 
-        if rows is None:
-            return f"Fout bij het ophalen van de tabel '{table_name}'.", 500
+        # Verwijder speciale tekens of escape de naam als nodig
+        # Bijvoorbeeld: verplaats speciale tekens tussen dubbele aanhalingstekens
+        sanitized_table_name = f'"{table_name}"'
 
+        # Controleer of de tabelnaam veilig is en correct
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+
+        # Verwijder dubbele aanhalingstekens om controle te maken
+        clean_table_name = table_name.strip('"')
+
+        if clean_table_name not in tables:
+            return f"Tabel '{clean_table_name}' bestaat niet in de database.", 404
+
+        # Haal de data op van de repository
+        rows = get_table_data(engine, sanitized_table_name)
         if not rows:
+            print(f"Geen gegevens gevonden voor tabel: {sanitized_table_name}")  # Debug output
             return f"Geen gegevens gevonden in de tabel '{table_name}'.", 404
 
-        # Render Data in template
+        # Haal de kolommen op uit de metadata
+        metadata = MetaData()
+        # Gebruik de tabelnaam zonder extra aanhalingstekens voor SQLAlchemy
+        table = Table(clean_table_name, metadata, autoload_with=engine)
+        columns = table.columns.keys()
+
+        # Render de data in een template
         return render_template('view_table.html', table_name=table_name, rows=rows, columns=columns)
+
     except Exception as e:
         tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))  # Traceback for debugging
+        print("".join(tb_str))  # Traceback voor debugging
         return f"Fout bij het ophalen van de tabel '{table_name}'.", 500
 
 
