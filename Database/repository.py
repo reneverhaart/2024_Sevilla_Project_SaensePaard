@@ -33,7 +33,7 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, create
     if not data:
         return "Geen gegevens gevonden in het XML-bestand.", 400
 
-    columns = [Column('unique_row_id', Integer, primary_key=True)]
+    columns = [Column('unique_upload_id', Integer, primary_key=True)]
     columns.extend(Column(key, Text) for key in data.keys())  # Gebruik Text voor grotere tekstkolommen
 
     print(f"Initial columns={columns}")
