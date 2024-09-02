@@ -1,10 +1,13 @@
 import os
 from datetime import datetime
+
+from sqlalchemy.ext.declarative import declarative_base
+
 from Database.structure import SevillaTable, Base
 from DataReader.DataRead_file import xml_to_sql, emit_progress_update
 from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, Table, text, inspect
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 import traceback
 
 engine = create_engine('sqlite:///saensepaard.db')
@@ -12,6 +15,7 @@ Session = sessionmaker(bind=engine)
 session = Session()
 metadata = MetaData()  # Keeps SQLite table definitions
 metadata.reflect(bind=engine)
+Base = declarative_base()
 
 
 def init_db(socketio):
@@ -50,10 +54,15 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, xml_co
     # Verkrijg de engine uit de session
     engine = session.bind
 
-    # Controleer of de tabel al bestaat
+    # Verwijder oude tabel als deze bestaat
     if engine.dialect.has_table(engine, table_name):
-        print(f"Tabel '{table_name}' bestaat al.")
-        return f"Tabel '{table_name}' bestaat al."
+        try:
+            # Verwijder de oude tabel
+            new_table.drop(engine)
+            print(f"Tabel '{table_name}' succesvol verwijderd.")
+        except Exception as e:
+            print(f"Fout bij verwijderen van tabel '{table_name}': {e}")
+            return f"Fout bij verwijderen van tabel '{table_name}': {e}"
 
     try:
         # Maak de nieuwe tabel aan
@@ -144,25 +153,28 @@ def insert_data(table_name, data):
             connection.execute(table.insert().values(item))
 
 
-def drop_old_duplicate_table(table_name):
-    # Zorg ervoor dat de metadata is gereflecteerd
-    metadata.reflect(bind=engine)
-
-    # Controleer of de tabel bestaat in de database
-    inspector = inspect(engine)
-    if table_name in inspector.get_table_names():
+def drop_old_duplicate_table(table_name, engine):
+    # Verwijder oude tabel als deze bestaat
+    metadata = MetaData()
+    table = Table(table_name, metadata, autoload_with=engine)
+    if engine.dialect.has_table(engine, table_name):
         try:
-            # Verwijder de tabel uit de metadata en dan uit de database
-            table = metadata.tables.get(table_name)
-            if table:
-                table.drop(bind=engine)
-                print(f"Tabel '{table_name}' succesvol verwijderd.")
-            else:
-                print(f"Tabel '{table_name}' is niet gevonden in de metadata.")
+            table.drop(engine)
+            print(f"Tabel '{table_name}' succesvol verwijderd.")
         except Exception as e:
             print(f"Fout bij verwijderen van tabel '{table_name}': {e}")
     else:
-        print(f"Tabel '{table_name}' bestaat niet in de database.")
+        print(f"Tabel '{table_name}' bestaat niet en hoeft niet verwijderd te worden.")
+
+
+def delete_old_file(file_path):
+    # Verwijder het oude bestand uit de uploadmap
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            print(f"Bestand '{file_path}' succesvol verwijderd.")
+        except OSError as e:
+            print(f"Fout bij verwijderen van bestand '{file_path}': {e}")
 
 
 """

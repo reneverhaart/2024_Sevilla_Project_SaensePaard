@@ -2,7 +2,7 @@
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
     <data-source source="LOCAL" name="saensepaard" uuid="2552e0ef-9b41-492d-b403-804a6d1b4741">
-      <driver-ref>sqlite.xerial</driver-ref>
+      <driver-ref>88fb3625-4aee-4fbe-9b94-d824cfa3f842</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
       <jdbc-url>jdbc:sqlite:D:\2024_Sevilla_Project_SaensePaard\saensepaard.db</jdbc-url>

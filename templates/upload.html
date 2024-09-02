@@ -14,6 +14,12 @@
                     <div id="selectedFileBlock" style="display: none; width:100%;">
                         <div id="fileNameDisplay" class="mt-2"></div>
                     </div>
+                    <div style="margin-top: 10px;">
+                        <label>
+                            <input type="checkbox" name="deleteFile" value="true">
+                            Oude bestanden verwijderen
+                        </label>
+                    </div>
                     <button type="submit" id="uploadButton" class="button-styling"
                             style="display: none; margin-top:20px; border:0">Upload sev
                     </button>
@@ -141,11 +147,6 @@
                 // Display feedback text
                 feedbackText.style.display = "inline-block";
             }
-        }
-
-        function confirmDelete() {
-            const sevTitle = document.getElementById('sev_title').value;
-            return confirm(`Weet u zeker dat u het Sevillabestand '${sevTitle}' wilt verwijderen?`);
         }
     </script>
 {% endblock %}

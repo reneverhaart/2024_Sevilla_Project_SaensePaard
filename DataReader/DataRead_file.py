@@ -1,3 +1,5 @@
+import os
+
 # Load corepackage extractor for xml
 import xml.etree.ElementTree as ET
 
@@ -19,38 +21,60 @@ def parse_date(date_str, date_format="%d-%m-%Y %H:%M:%S"):
 
 
 def parse_xml(filepath):
+    # Parse the XML file
     tree = ET.parse(filepath)
     root = tree.getroot()
 
-    # Extracting data from the <Contents> section
-    contents = root.find('Contents')
-    if contents is not None:
-        created_str = contents.find('Created').text
-        created_date = parse_date(created_str, "%d-%m-%Y %H:%M:%S")
-    else:
-        created_date = None
+    # Initialize variables to store extracted data
+    created_date = None
+    title = None
+    data = {}
 
-    # Extracting data from the <Comp> section
-    comps = root.findall('Comp')
-    data = []
-    for comp in comps:
-        item = {elem.tag: elem.text for elem in comp}
-        data.append(item)
+    # Loop through the XML structure and extract relevant data
+    for child in root:
+        print(f"Tag: {child.tag}, Attrib: {child.attrib}")  # Optional: For debugging
 
-    # Sorting data by the 'Name' field
-    data_sorted = sorted(data, key=lambda x: x.get('Name', ''))
+        # Check if the child has any sub-elements
+        for sub_child in child:
+            print(f"  Sub-tag: {sub_child.tag}, Text: {sub_child.text}")
 
-    return created_date, data_sorted
+            if sub_child.tag == 'Created':
+                # Parse the 'Created' value as a datetime object
+                try:
+                    created_date = datetime.strptime(sub_child.text.strip(), '%d-%m-%Y %H:%M:%S')
+                except ValueError:
+                    print(f"Error parsing date: {sub_child.text.strip()}")
+
+            elif sub_child.tag == 'FileName':
+                # Store the 'FileName' value in title
+                title = sub_child.text.strip()
+
+            # Add sub-child tag and text to the dictionary
+            data[sub_child.tag] = sub_child.text.strip() if sub_child.text else None
+
+            # Add sub-child tag and text to the dictionary
+            if sub_child.tag in data:
+                # If key exists, append the new value to the list
+                if isinstance(data[sub_child.tag], list):
+                    data[sub_child.tag].append(sub_child.text.strip() if sub_child.text else None)
+                else:
+                    data[sub_child.tag] = [data[sub_child.tag], sub_child.text.strip() if sub_child.text else None]
+            else:
+                data[sub_child.tag] = sub_child.text.strip() if sub_child.text else None
+
+    print(f"title={title}, date={created_date}")
+
+    return title, created_date, data
 
 
 def xml_to_sql(filepath, socketio, session):
     # Import the necessary function inside the function to avoid circular import issues
-    from Database.repository import insert_data
+    from Database.repository import insert_data, make_table
 
-    # Parse the XML file to extract created_date and data
-    created_date, data = parse_xml(filepath)
+    # Parse the XML file to extract title, created_date, and sorted data
+    title, created_date, data_sorted = parse_xml(filepath)
 
-    if not data:
+    if not data_sorted:
         print("Geen gegevens gevonden in het XML-bestand.")
         return
 
@@ -59,10 +83,15 @@ def xml_to_sql(filepath, socketio, session):
         'filename': os.path.basename(filepath)
     })()  # Simplified structure to pass the filename
 
-    result = make_table(sev_file, socketio, session, sev_index=1, total_amount_sevs=1, xml_columns=data[0].keys(), created_date=created_date)
+    # Create the table using the extracted columns and metadata
+    result = make_table(xml_columns=data_sorted[0].keys(), title=title, created_date=created_date)
+
     print(result)
 
     # Insert data into the newly created table
-    if "succesvol aangemaakt" in result:
-        insert_data(sev_file.filename, data)
+    if "succesvol aangemaakt" in result.lower():
+        insert_data(sev_file.filename, data_sorted)
+    else:
+        print("Tabel werd niet aangemaakt. Geen gegevens ingevoerd.")
+
 
