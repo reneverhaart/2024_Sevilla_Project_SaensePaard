@@ -21,19 +21,18 @@
     <aside id="sidebar" class="sidebar">
         <ul class="sidebar-nav" id="sidebar-nav">
             <li class="nav-item">
-                <a class="nav-link collapsed" href="/">
+                <a class="nav-link collapsed" href="{{ url_for('home') }}">
                     <i class="bi bi-person"></i>
                     <span>Home</span>
                 </a>
             </li>
-            <!-- Other sidebar items here -->
+
             <li class="nav-item">
-                <a class="nav-link collapsed" href="/a">
+                <a class="nav-link collapsed" href="{{ url_for('upload') }}">
                     <i class="bi bi-gear"></i>
-                    <span>a</span>
+                    <span>Upload</span>
                 </a>
             </li>
-            <!-- Add additional sidebar items as needed -->
         </ul>
     </aside>
 
