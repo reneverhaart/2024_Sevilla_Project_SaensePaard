@@ -1,33 +1,31 @@
 {% extends "base_template.html" %}
 
 {% block content %}
-    <h1>Zoekresultaten voor "{{ query }}"</h1>
+    <h1>Resultaten voor: {{ query }}</h1>
+
     {% if results %}
-        <ul>
-            {% for result in results %}
-                <li>
-                    <h2>Tabel: {{ result.table_name }}</h2>
-                    <table border="1">
-                        <thead>
-                            <tr>
-                                {% for column in result.rows[0].keys() %}
-                                    <th>{{ column }}</th>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>Tabelnaam</th>
+                    <th>Resultaten</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for result in results %}
+                    <tr>
+                        <td>{{ result.table }}</td>
+                        <td>
+                            <ul>
+                                {% for row in result.rows %}
+                                    <li>{{ row }}</li>
                                 {% endfor %}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in result.rows %}
-                                <tr>
-                                    {% for column in row.keys() %}
-                                        <td>{{ row[column] }}</td>
-                                    {% endfor %}
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </li>
-            {% endfor %}
-        </ul>
+                            </ul>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% else %}
         <p>Geen resultaten gevonden.</p>
     {% endif %}

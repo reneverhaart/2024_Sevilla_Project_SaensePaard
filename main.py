@@ -208,6 +208,9 @@ def view_statistics():
     table_name = request.args.get('table_name', '')  # Get the table name from the query parameters
     query = request.args.get('query', '')
 
+    print(f"Table Name: {table_name}")  # Debug output
+    print(f"Query: {query}")  # Debug output
+
     if not table_name:
         return "Geen tabelnaam opgegeven.", 400
     if not query:
@@ -218,6 +221,7 @@ def view_statistics():
 
         # Verkrijg de statistieken voor de opgegeven zoekterm in de Comp kolom
         statistics = get_statistics_data(table_name, engine, 'Comp', query)
+        print(f"Statistics: {statistics}")  # Debug output
         if not statistics:
             return f"Geen statistieken gevonden voor zoekterm '{query}' in tabel '{table_name}'.", 404
 

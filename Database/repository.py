@@ -192,27 +192,46 @@ def view_table(engine, table_name):
 
 def search_across_tables(engine, column_name, query_value):
     metadata = MetaData()
-    metadata.reflect(bind=engine)
+    inspector = inspect(engine)
+    table_names = inspector.get_table_names()
     results = []
+    column_variants = [column_name, column_name.upper(), column_name.lower()]
 
-    # Iterate over all tables in the database
-    for table_name, table in metadata.tables.items():
-        if column_name in table.c:
-            # Construct a query to search within the specified column
-            stmt = select(table).where(table.c[column_name].ilike(f'%{query_value}%'))
+    print(f"Zoeken in kolommen: {column_variants} met waarde: {query_value}")  # Debug output
+
+    for table_name in table_names:
+        table = Table(table_name, metadata, autoload_with=engine)
+        found_column = None
+
+        # Zoek de kolom in verschillende varianten
+        for variant in column_variants:
+            if variant in table.c:
+                found_column = variant
+                break
+
+        if not found_column:
+            print(f"Geen van de kolommen {column_variants} gevonden in tabel '{table_name}'")  # Debug output
+            continue
+
+        print(f"Gebruik kolom '{found_column}' voor zoekopdracht")  # Debug output
+
+        # Maak een correcte select-query
+        query = select(table).where(table.c[found_column].ilike(f'%{query_value}%'))
+        print(f"Uitvoeren query: {query}")  # Debug output
+
+        try:
             with engine.connect() as connection:
-                result = connection.execute(stmt)
+                result = connection.execute(query)
                 rows = result.fetchall()
-
-                # Convert each row to a dictionary using _asdict()
-                rows_dicts = [row._asdict() for row in rows]
-
-                if rows_dicts:
+                if rows:
                     results.append({
-                        'table_name': table_name,
-                        'rows': rows_dicts
+                        'table': table_name,
+                        'rows': rows
                     })
+        except Exception as e:
+            print(f"Fout bij uitvoeren van query: {e}")
 
+    print(f"Resultaten gevonden: {results}")  # Debug output
     return results
 
 
