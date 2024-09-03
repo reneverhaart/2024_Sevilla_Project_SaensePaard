@@ -14,10 +14,10 @@
                         <div id="selectedFileBlock" style="display: none; width:100%;">
                             <div id="fileNameDisplay" class="mt-2"></div>
                         </div>
-                        <div style="margin-top: 10px;">
+                        <!-- volgende div mogelijk eruit slopen: -->
+                        <div style="margin-top: 10px">
                             <label>
-                                <input type="checkbox" name="deleteFile" value="true">
-                                Oude bestanden verwijderen
+                                <input type="checkbox" name="deleteFile" value="true" disabled>
                             </label>
                         </div>
                         <button type="submit" id="uploadButton" class="button-styling"
@@ -42,7 +42,7 @@
                             </thead>
                             <tbody>
                                 {% for sev in sevs %}
-                                    <tr>
+                                    <tr id="sev-row-{{ sev.id }}">
                                         <td style="border: 1px solid #ddd; padding: 8px;">{{ sev.title }}</td>
                                         <td style="border: 1px solid #ddd; padding: 8px;">
                                             {% if sev.upload_date %}
@@ -132,6 +132,10 @@
                 uploadButton.style.display = "none";
                 feedbackText.style.display = "inline-block";
             }
+        }
+
+        function confirmDelete() {
+            return confirm('Weet je zeker dat je dit bestand wilt verwijderen? Dit kan niet ongedaan gemaakt worden.');
         }
     </script>
 {% endblock %}

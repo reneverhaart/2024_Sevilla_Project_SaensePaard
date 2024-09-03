@@ -25,7 +25,7 @@ from flask_socketio import SocketIO
 
 # Repository related imports
 from Database.repository import init_db, session, make_table, drop_old_duplicate_table, delete_old_file, get_tables, \
-    query_database, engine
+    query_database, engine, delete_file_from_session
 from Database.structure import SevillaTable
 
 # Data-reading related imports
@@ -73,9 +73,6 @@ def upload():
         if not sev_files:
             return 'No selected file', 400
 
-        # Verkrijg de keuze om het oude bestand en de oude tabel te verwijderen
-        delete_file = request.form.get('deleteFile') == 'true'
-
         emit_progress_update(socketio, 'Sevilla bestanden verwerken naar database...', 0)
         total_amount_sevs = len(sev_files)
 
@@ -94,28 +91,18 @@ def upload():
                 if not data:
                     return "Geen gegevens gevonden in het XML-bestand.", 400
 
-                if delete_file:
-                    table_name = f"{title}_{created_date.strftime('%Y%m%d_%H%M')}".replace(' ', '_').replace('.', '_')
-                    try:
-                        # Verwijder de oude tabel
-                        drop_old_duplicate_table(table_name, session.bind)
-                        # Verwijder het oude bestand
-                        delete_old_file(sev_file_path)
-                        print(f"Bestand '{sev_file_path}' en tabel '{table_name}' succesvol verwijderd.")
-                    except Exception as e:
-                        print(f"Fout bij het verwijderen van bestand '{sev_file_path}' of tabel '{table_name}': {e}")
-                        feedback = f"Fout bij het verwijderen van bestand of tabel: {e}"
-
                 # Maak de tabel aan met de benodigde argumenten
-                feedback = make_table(
+                feedback, status_code = make_table(
                     sev_file=sev_file,
                     socketio=socketio,
                     session=session,
+                    created_date=created_date,
                     sev_index=sev_index + 1,  # Geef de huidige index door
                     total_amount_sevs=total_amount_sevs,
-                    created_date=created_date,  # Geef de aangemaakte datum door
                     data=data
                 )
+                if status_code != 200:
+                    return feedback, status_code
 
         # Verkrijg de tabelinformatie na verwerking van bestanden
         all_sevs = list(get_tables(session))[::-1]
@@ -138,9 +125,6 @@ def delete_old_sev_file():
             sev_file_to_delete = session.query(SevillaTable).get(sev_id)
 
             if sev_file_to_delete:
-                # Verkrijg het bestandspad van de sev_file
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], sev_file_to_delete.filename)
-
                 # Bouw de tabelnaam op basis van de title en upload_date
                 table_name = f"{sev_file_to_delete.title}_{sev_file_to_delete.upload_date.strftime('%Y%m%d_%H%M')}".replace(
                     ' ', '_').replace('.', '_')
@@ -148,12 +132,11 @@ def delete_old_sev_file():
                 # Verkrijg de engine uit de session
                 engine = session.bind
 
-                # Verwijder de oude tabel en het bestand
-                drop_old_duplicate_table(table_name, engine)
+                # Verwijder de oude tabel
+                drop_old_duplicate_table(engine, table_name)
 
                 # Verwijder het record uit de database
-                session.delete(sev_file_to_delete)
-                session.commit()
+                delete_file_from_session(sev_file_to_delete)
 
                 feedback = 'Sev file succesvol verwijderd.'
             else:

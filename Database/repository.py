@@ -26,8 +26,7 @@ def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, create
     print(f"\ndata.values() = {data.values()}")
 
     title = sev_file.filename
-    formatted_date = created_date.strftime("%Y%m%d_%H%M")
-    table_name = f"{title}_{formatted_date}".replace(' ', '_').replace('.', '_')
+    table_name = f"{title}_".replace(' ', '_').replace('.', '_')
     print(f"table_name={table_name}")
 
     if not data:
@@ -101,19 +100,29 @@ def drop_old_duplicate_table(engine, table_name):
     metadata = MetaData()
     metadata.reflect(bind=engine)
 
+    # Controleer of de tabel bestaat in de metadata
     if table_name in metadata.tables:
-        table = metadata.tables[table_name]
         try:
             # Verwijder de tabel
             with engine.connect() as conn:
                 conn.execute(f"DROP TABLE IF EXISTS {table_name}")
             print(f"Tabel '{table_name}' succesvol verwijderd.")
+
+            # Controleer opnieuw of de tabel nog steeds bestaat
+            insp = inspect(engine)
+            if table_name in insp.get_table_names():
+                print(f"Waarschuwing: Tabel '{table_name}' bestaat nog steeds in de database.")
+            else:
+                print(f"Bevestiging: Tabel '{table_name}' is succesvol verwijderd uit de database.")
+
         except SQLAlchemyError as e:
             print(f"Fout bij het verwijderen van de tabel '{table_name}': {e}")
             return f"Fout bij het verwijderen van de tabel '{table_name}'.", 500
     else:
         print(f"Tabel '{table_name}' bestaat niet.")
         return f"Tabel '{table_name}' bestaat niet.", 404
+
+    return f"Tabel '{table_name}' succesvol verwijderd.", 200
 
 
 def delete_old_file(file_path):
@@ -207,7 +216,29 @@ def search_across_tables(engine, column_name, query_value):
     return results
 
 
-def query_database(table_name):
+def delete_file_from_session(sev_file_to_delete):
+    print(f"Probeer tabel '{sev_file_to_delete.title}' te verwijderen...")
+
+    # Delete the file in the session
+    session.delete(sev_file_to_delete)
+
+    # Save changes for upcoming sessions
+    session.commit()
+
+    # Check if table still in query for optional debugging
+    rows, columns = query_database(sev_file_to_delete.title, warning=False)
+
+    # Refresh MetaData
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+
+    if rows is None and columns is None:
+        print(f"Tabel '{sev_file_to_delete.title}' is dus succesvol verwijderd uit de database.")
+    else:
+        print(f"Waarschuwing: Tabel '{sev_file_to_delete.title}' bestaat nog steeds in de database.")
+
+
+def query_database(table_name, warning=True):
     try:
         # Haal kolommen op via inspect
         inspector = inspect(session.bind)
@@ -222,5 +253,6 @@ def query_database(table_name):
 
         return rows, columns
     except SQLAlchemyError as e:
-        print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
+        if warning:
+            print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
         return None, None

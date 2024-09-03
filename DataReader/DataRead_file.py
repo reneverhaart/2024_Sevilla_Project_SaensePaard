@@ -48,12 +48,12 @@ def parse_xml(filepath):
 
     # Loop through the root and extract relevant data
     for child in root:
-        if child.tag == 'Created':
+        if child.tag in ['Created', 'CREATED']:
             try:
                 created_date = datetime.strptime(child.text.strip(), '%d-%m-%Y %H:%M:%S')
             except (ValueError, AttributeError) as e:
                 print(f"Error parsing date: {child.text.strip() if child.text else 'None'} - {e}")
-        elif child.tag == 'FileName':
+        elif child.tag in ['filename', 'file_name', 'FILENAME']:
             title = child.text.strip()
         else:
             # Use the parse_element function to handle nested elements
