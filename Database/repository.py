@@ -103,9 +103,9 @@ def drop_old_duplicate_table(engine, table_name):
     # Controleer of de tabel bestaat in de metadata
     if table_name in metadata.tables:
         try:
-            # Verwijder de tabel
+            # Escape de tabelnaam en verwijder de tabel
             with engine.connect() as conn:
-                conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                conn.execute(text(f"DROP TABLE IF EXISTS \"{table_name}\""))
             print(f"Tabel '{table_name}' succesvol verwijderd.")
 
             # Controleer opnieuw of de tabel nog steeds bestaat

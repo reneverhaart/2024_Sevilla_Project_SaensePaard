@@ -52,7 +52,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 metadata = MetaData()
 metadata.clear()
 
-
 ### STARTING APP ROUTES ###
 
 
@@ -125,18 +124,21 @@ def delete_old_sev_file():
             sev_file_to_delete = session.query(SevillaTable).get(sev_id)
 
             if sev_file_to_delete:
-                # Bouw de tabelnaam op basis van de title en upload_date
-                table_name = f"{sev_file_to_delete.title}_{sev_file_to_delete.upload_date.strftime('%Y%m%d_%H%M')}".replace(
+                # Bouw de tabelnaam op basis van de title
+                table_name = f"{sev_file_to_delete.title}".replace(
                     ' ', '_').replace('.', '_')
 
                 # Verkrijg de engine uit de session
                 engine = session.bind
 
                 # Verwijder de oude tabel
-                drop_old_duplicate_table(engine, table_name)
+                feedback, status_code = drop_old_duplicate_table(engine, table_name)
+                if status_code != 200:
+                    return feedback, status_code
 
                 # Verwijder het record uit de database
-                delete_file_from_session(sev_file_to_delete)
+                session.delete(sev_file_to_delete)
+                session.commit()
 
                 feedback = 'Sev file succesvol verwijderd.'
             else:
