@@ -90,6 +90,10 @@ def upload():
                 if not data:
                     return "Geen gegevens gevonden in het XML-bestand.", 400
 
+                # Verwijder het bestand na het parsen om computer schoon te houden
+                if os.path.exists(sev_file_path):
+                    os.remove(sev_file_path)
+
                 # Maak de tabel aan met de benodigde argumenten
                 feedback, status_code = make_table(
                     sev_file=sev_file,
@@ -122,14 +126,6 @@ def delete_old_sev_file():
         try:
             # Fetch the sev_file by ID
             sev_file_to_delete = session.query(SevillaTable).get(sev_id)
-
-            # TODO!: Delete sev_file on computer in folder Data
-            #if os.path.isfile(sev_id):
-            #    os.remove(sev_id)
-
-
-            #sev_file_path = os.path.join(app.config['UPLOAD_FOLDER'], sev_id.filename)
-            #os.remove(sev_file_path)
 
             if sev_file_to_delete:
                 # Bouw de tabelnaam op basis van de title
