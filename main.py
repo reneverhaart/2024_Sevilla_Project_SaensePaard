@@ -123,6 +123,14 @@ def delete_old_sev_file():
             # Fetch the sev_file by ID
             sev_file_to_delete = session.query(SevillaTable).get(sev_id)
 
+            # TODO!: Delete sev_file on computer in folder Data
+            #if os.path.isfile(sev_id):
+            #    os.remove(sev_id)
+
+
+            #sev_file_path = os.path.join(app.config['UPLOAD_FOLDER'], sev_id.filename)
+            #os.remove(sev_file_path)
+
             if sev_file_to_delete:
                 # Bouw de tabelnaam op basis van de title
                 table_name = f"{sev_file_to_delete.title}".replace(
