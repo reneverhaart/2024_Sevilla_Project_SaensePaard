@@ -1,277 +1,250 @@
 import os
+import logging
+import re
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, Table, inspect, MetaData, Inspector, text, select
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import (
+    create_engine, Column, Integer, Text, MetaData,
+    Table, inspect, select, text, func
+)
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker, scoped_session
+from Database.structure import SevillaTable, Base, Round, Game, Absence, Player
+from DataReader.DataRead_file import parse_xml, parse_date_safe
 
-from DataReader.DataRead_file import parse_xml
-from Database.structure import SevillaTable, Base
-import traceback
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-engine = create_engine('sqlite:///saensepaard.db')
-Session = sessionmaker(bind=engine)
-session = Session()
-
-
-# Initieer de database zonder metadata
-def init_db(socketio):
-    # Creëer de SevillaTable
-    SevillaTable.__table__.create(bind=engine, checkfirst=True)
+# Engine & session factory
+ENGINE_URL = 'sqlite:///saensepaard.db'
+engine = create_engine(ENGINE_URL, echo=False)
+SessionFactory = sessionmaker(bind=engine)
+Session = scoped_session(SessionFactory)
 
 
-def make_table(sev_file, socketio, session, sev_index, total_amount_sevs, created_date, data):
-    print(f"Begin van data make_table() in repository.py:\n{data}\nEinde van data make_table() in repository.py.")
-    print(f"\ndata.keys() = {data.keys()}")
-    print(f"\ndata.values() = {data.values()}")
+# Initialize DB and create SevillaTable
+def init_db():
+    Base.metadata.create_all(engine)
+    logger.info("Database initialized and tables created.")
 
-    title = sev_file.filename
-    table_name = f"{title}_".replace(' ', '_').replace('.', '_')
-    print(f"table_name={table_name}")
 
+# Drop table if exists
+def drop_table(table_name: str):
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+    if table_name in metadata.tables:
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
+        logger.info(f"Dropped existing table: {table_name}")
+    else:
+        logger.debug(f"Table '{table_name}' does not exist.")
+
+
+def safe_table_name(name: str) -> str:
+    # Vervang alles wat geen letter, cijfer of underscore is door underscore
+    safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', name)
+    # Verwijder dubbele underscores
+    safe_name = re.sub(r'_+', '_', safe_name)
+    # Verwijder underscore aan het begin en eind (optioneel)
+    safe_name = safe_name.strip('_')
+    return safe_name
+
+
+# Create and populate a dynamic table from sev data
+def make_table(sev_file, sev_index: int, total_amount_sevs: int, upload_date, created_date_xml, data: dict):
     if not data:
         return "Geen gegevens gevonden in het XML-bestand.", 400
 
-    columns = [Column('unique_upload_id', Integer, primary_key=True)]
-    columns.extend(Column(key, Text) for key in data.keys())  # Gebruik Text voor grotere tekstkolommen
+    title = sev_file.filename
 
-    print(f"Initial columns={columns}")
-    print("Starten met lokale MetaData voor dynamische kolommen...")
+    # In plaats van dynamische tabel aan te maken, alleen metadata opslaan
+    session = Session()
 
-    metadata = MetaData()
-    engine = create_engine('sqlite:///saensepaard.db')
-    dynamic_table = Table(table_name, metadata, *columns, extend_existing=True)
-
+    print(f"\nmake_table data van bestand '{title}': \n{data}\n")
     try:
-        metadata.create_all(engine)
-        print(f"Tabel '{table_name}' succesvol aangemaakt.")
-    except SQLAlchemyError as e:
-        print(f"Fout bij het aanmaken van de tabel: {e}")
-        print(traceback.format_exc())
-        return "Fout bij het aanmaken van de tabel.", 500
-
-    # Verwerk data om ongewenste waarden te verwijderen en speciale tekens te normaliseren
-    data = {key: str(value).replace('\\', '/') if isinstance(value, str) else value for key, value in data.items()}
-
-    for key, value in data.items():
-        if not isinstance(value, (str, int, float, bytes)):
-            print(f"make_table(): waarde van key={key} heeft een niet-ondersteund type: {type(value)}")
-            data[key] = str(value)  # Converteer niet-ondersteunde types naar string
-
-    try:
-        with engine.connect() as conn:
-            print(f"Data om in te voegen met engine.connect(): {data}")
-
-            insert_statement = dynamic_table.insert().values(data)
-            print(f"Uitgevoerde query: {insert_statement}")
-            print(f"Parameters: {data}")
-
-            conn.execute(insert_statement)
-            conn.commit()
-            print(f"Gegevens succesvol ingevoegd in de dynamische tabel '{table_name}'.")
-
-            # Bekijk gemaakte dynamic_table in database
-            view_table(engine, table_name)
-
-    except SQLAlchemyError as e:
-        print(f"Fout bij het invoegen van gegevens: {e}")
-        print(traceback.format_exc())
-        return "Fout bij het invoegen van gegevens.", 500
-
-    try:
-        new_sevilla_table = SevillaTable(
-            title=table_name,
-            name=title,
-            upload_date=created_date
-        )
-        session.add(new_sevilla_table)
+        # Eerst metadata recorden in SevillaTable
+        record = SevillaTable(title=title, name=title,
+                              upload_date=upload_date, created_date=created_date_xml)
+        session.add(record)
         session.commit()
-        print(f"Nieuwe tabel '{table_name}' toegevoegd aan SevillaTable.")
-        return f"Tabel '{table_name}' succesvol aangemaakt en gevuld.", 200
+        sevilla_id = record.id  # Primary key van dit toernooi
+
+        # Check op "Jeugd" in titel (case-insensitive)
+        #=>Senioren wordt IDs 10000+
+        #=>Jeugd wordt IDs 0-9999
+        jeugd_offset = 10000 if not "jeugd" in title.lower() else 0
+
+        players_data = data.get('COMP', {}).get('players', [])
+        for p in players_data:
+            original_id = p.get('ID')
+            if original_id is None or not original_id.isdigit():
+                continue  # of afhandelen indien nodig
+
+            player_id = int(original_id) + jeugd_offset
+            player_obj = Player(
+                id=player_id,
+                sevilla_id=sevilla_id,
+                first_name=p.get('FIRST', ''),
+                last_name=p.get('LAST', '')
+            )
+            exists = session.query(Player).filter_by(id=player_id).first()
+            if not exists: # Om "UNIQUE constraint failed"-error te voorkomen
+                session.add(player_obj)
+
+        rounds_data = data.get('COMP', {}).get('rounds', [])
+        print(f"Aantal rondes: {len(rounds_data)}")
+        for round_dict in rounds_data:
+            print(f"Ronde dict keys: {list(round_dict.keys())}")
+
+            round_num = int(round_dict.get('ID', 0))
+            date_str = round_dict.get('DATE')
+            print(f"\ndate_str:\n{date_str}\n")
+            round_date = parse_date_safe(date_str) if date_str else None
+            print(f"\nround_date:\n{round_date}\n")
+
+            round_obj = Round(sevilla_id=sevilla_id, round_number=round_num, date=round_date)
+            session.add(round_obj)
+            session.flush()
+
+            games_data = round_dict.get('games', [])
+            print(f"Aantal games in ronde {round_num}: {len(games_data)}")
+            for game_dict in games_data:
+                print(f"Game dict keys: {list(game_dict.keys())}")
+                white = game_dict.get('WHITE')
+                black = game_dict.get('BLACK')
+                result = game_dict.get('RES')
+                game_obj = Game(sevilla_id=sevilla_id, round_id=round_obj.id,
+                                white_player=white, black_player=black, result=result)
+                session.add(game_obj)
+
+            absences_data = round_dict.get('absences', [])
+            print(f"Aantal afwezigen in ronde {round_num}: {len(absences_data)}")
+            for absence_dict in absences_data:
+                print(f"Absence dict keys: {list(absence_dict.keys())}")
+                player_name = absence_dict.get('PLAYER')
+                absence_obj = Absence(sevilla_id=sevilla_id, round_id=round_obj.id,
+                                      player_name=player_name)
+                session.add(absence_obj)
+
+        session.commit()
+        return f"Gegevens uit '{title}' succesvol aangemaakt en gevuld.", 200
+
     except SQLAlchemyError as e:
-        print(f"Fout bij het toevoegen van de tabel aan SevillaTable: {e}")
-        print(traceback.format_exc())
         session.rollback()
-        return "Fout bij het toevoegen van de tabel aan SevillaTable.", 500
+        logger.error(f"Fout bij het invoegen van gegevens: {e}")
+        return "Fout bij het invoegen van gegevens.", 500
+    finally:
+        session.close()
 
 
-def drop_old_duplicate_table(engine, table_name):
-    """Verwijder een oude tabel met dezelfde naam als 'table_name' als deze bestaat."""
-    metadata = MetaData()
-    metadata.reflect(bind=engine)
-
-    # Controleer of de tabel bestaat in de metadata
-    if table_name in metadata.tables:
-        try:
-            # Escape de tabelnaam en verwijder de tabel
-            with engine.connect() as conn:
-                conn.execute(text(f"DROP TABLE IF EXISTS \"{table_name}\""))
-            print(f"Tabel '{table_name}' succesvol verwijderd.")
-
-            # Controleer opnieuw of de tabel nog steeds bestaat
-            insp = inspect(engine)
-            if table_name in insp.get_table_names():
-                print(f"Waarschuwing: Tabel '{table_name}' bestaat nog steeds in de database.")
-            else:
-                print(f"Bevestiging: Tabel '{table_name}' is succesvol verwijderd uit de database.")
-
-        except SQLAlchemyError as e:
-            print(f"Fout bij het verwijderen van de tabel '{table_name}': {e}")
-            return f"Fout bij het verwijderen van de tabel '{table_name}'.", 500
-    else:
-        print(f"Tabel '{table_name}' bestaat niet.")
-        return f"Tabel '{table_name}' bestaat niet.", 404
-
-    return f"Tabel '{table_name}' succesvol verwijderd.", 200
-
-
-def delete_old_file(file_path):
+# Delete associated file from disk
+def delete_old_file(file_path: str):
     try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print(f"Bestand '{file_path}' succesvol verwijderd.")
-        else:
-            print(f"Bestand '{file_path}' bestaat niet.")
+        os.remove(file_path)
+        logger.info(f"Deleted file: {file_path}")
+    except FileNotFoundError:
+        logger.warning(f"File '{file_path}' not found.")
     except Exception as e:
-        print(f"Fout bij het verwijderen van bestand '{file_path}': {e}")
+        logger.error(f"Error deleting file '{file_path}': {e}")
         raise
 
-
-def get_tables(session):
+# Fetch all SevillaTable entries
+def get_tables():
+    session = Session()
     try:
-        # Haal alle SevillaTable records op
         return session.query(SevillaTable).all()
-    except SQLAlchemyError as e:
-        print(f"Fout bij het ophalen van tabellen: {e}")
-        return []
+    finally:
+        session.close()
 
+# List all table names in DB
+def get_table_names():
+    inspector = inspect(engine)
+    return inspector.get_table_names()
 
-def get_statistics_data(table_name, engine, column_name, query_value):
-    metadata = MetaData()
-    table = Table(table_name, metadata, autoload_with=engine)
-
-    # Construct a query to search within the specified column
-    query = select([table]).where(table.c[column_name].ilike(f'%{query_value}%'))
-
-    with engine.connect() as connection:
-        result = connection.execute(query)
-        return result.fetchall()
-
-
-def get_table_data(engine, table_name):
+# Fetch all rows from a dynamic table
+def get_table_data(table_name: str):
     try:
         with engine.connect() as conn:
-            query = text(f'SELECT * FROM {table_name}')
-            result = conn.execute(query)
+            result = conn.execute(text(f'SELECT * FROM "{table_name}"'))
             return result.fetchall()
-    except Exception as e:
-        print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
-        return None
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching data from '{table_name}': {e}")
+        return []
 
-
-def view_table(engine, table_name):
-    metadata = MetaData()
-    dynamic_table = Table(table_name, metadata, autoload_with=engine)
-
-    with engine.connect() as conn:
-        query = select(dynamic_table)
-        print(f"Executing query: {query}")
-        result = conn.execute(query)
-        rows = result.fetchall()
-
-        # Print kolomnamen
-        column_names = dynamic_table.columns.keys()
-        print(f"Kolomnamen dynamic_table volgens view_table: {column_names}")
-
-        # Print gegevens
-        print("\nRijen van dynamic_table:")
-        for row in rows:
-            print(row)
-        print("\nEinde rijen van dynamic_table.")
-
-
-def search_across_tables(engine, column_name, query_value):
-    metadata = MetaData()
-    inspector = inspect(engine)
-    table_names = inspector.get_table_names()
+# Search a column across all tables
+def search_across_tables(column_name: str, query_value: str):
     results = []
-    column_variants = [column_name, column_name.upper(), column_name.lower()]
-
-    print(f"Zoeken in kolommen: {column_variants} met waarde: {query_value}")  # Debug output
-
-    for table_name in table_names:
+    for table_name in get_table_names():
+        metadata = MetaData()
+        metadata.reflect(bind=engine)
         table = Table(table_name, metadata, autoload_with=engine)
-        found_column = None
-
-        # Zoek de kolom in verschillende varianten
-        for variant in column_variants:
-            if variant in table.c:
-                found_column = variant
-                break
-
-        if not found_column:
-            print(f"Geen van de kolommen {column_variants} gevonden in tabel '{table_name}'")  # Debug output
+        col = next((c for c in table.c if c.name.lower() == column_name.lower()), None)
+        if not col:
             continue
-
-        print(f"Gebruik kolom '{found_column}' voor zoekopdracht")  # Debug output
-
-        # Maak een correcte select-query
-        query = select(table).where(table.c[found_column].ilike(f'%{query_value}%'))
-        print(f"Uitvoeren query: {query}")  # Debug output
-
-        try:
-            with engine.connect() as connection:
-                result = connection.execute(query)
-                rows = result.fetchall()
-                if rows:
-                    results.append({
-                        'table': table_name,
-                        'rows': rows
-                    })
-        except Exception as e:
-            print(f"Fout bij uitvoeren van query: {e}")
-
-    print(f"Resultaten gevonden: {results}")  # Debug output
+        stmt = select(table).where(col.ilike(f'%{query_value}%'))
+        with engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+            if rows:
+                results.append({'table': table_name, 'rows': rows})
     return results
 
+# Recursively search nested data
+def specific_search_data(data, key_to_find: str):
+    if isinstance(data, dict):
+        if key_to_find in data:
+            return data[key_to_find]
+        for value in data.values():
+            found = specific_search_data(value, key_to_find)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = specific_search_data(item, key_to_find)
+            if found is not None:
+                return found
+    return None
 
-def delete_file_from_session(sev_file_to_delete):
-    print(f"Probeer tabel '{sev_file_to_delete.title}' te verwijderen...")
+# Search term in all tables
+def specific_search_data_in_all_tables(search_term: str):
+    results = []
+    for table_name in get_table_names():
+        rows = get_table_data(table_name)
+        found = specific_search_data(rows, search_term)
+        if found is not None:
+            results.append({'table': table_name, 'result': found})
+    return results
 
-    # Delete the file in the session
-    session.delete(sev_file_to_delete)
-
-    # Save changes for upcoming sessions
-    session.commit()
-
-    # Check if table still in query for optional debugging
-    rows, columns = query_database(sev_file_to_delete.title, warning=False)
-
-    # Refresh MetaData
+# Get statistics for a column (value counts), optionally filtered by a query
+def get_statistics_data(engine, table_name: str, column_name: str, query_value: str = None):
+    session = Session()
     metadata = MetaData()
     metadata.reflect(bind=engine)
-
-    if rows is None and columns is None:
-        print(f"Tabel '{sev_file_to_delete.title}' is dus succesvol verwijderd uit de database.")
-    else:
-        print(f"Waarschuwing: Tabel '{sev_file_to_delete.title}' bestaat nog steeds in de database.")
-
-
-def query_database(table_name, warning=True):
+    table = Table(table_name, metadata, autoload_with=engine)
+    stmt = select(table.c[column_name], func.count().label('count')).group_by(table.c[column_name])
+    if query_value:
+        stmt = stmt.where(table.c[column_name].ilike(f'%{query_value}%'))
     try:
-        # Haal kolommen op via inspect
-        inspector = inspect(session.bind)
-        if not inspector.has_table(table_name):
-            return None, None
+        result = session.execute(stmt).fetchall()
+        return [{'value': r[0], 'count': r[1]} for r in result]
+    finally:
+        session.close()
 
-        columns = [column['name'] for column in inspector.get_columns(table_name)]
-
-        # Voer een ruwe SQL-query uit om alle rijen op te halen
-        result = session.execute(f"SELECT * FROM {table_name}").fetchall()
-        rows = [dict(row) for row in result]
-
-        return rows, columns
-    except SQLAlchemyError as e:
-        if warning:
-            print(f"Fout bij het ophalen van gegevens uit de tabel '{table_name}': {e}")
-        return None, None
+# Provide search suggestions based on existing table data
+def get_search_suggestions(engine, table_name: str, search_term: str, limit: int = 10):
+    suggestions = set()
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+    table = Table(table_name, metadata, autoload_with=engine)
+    with engine.connect() as conn:
+        for col in table.c:
+            # only text-like columns
+            if hasattr(col.type, 'length') or isinstance(col.type, Text):
+                stmt = select(col).where(col.ilike(f'%{search_term}%')).limit(limit)
+                for val, in conn.execute(stmt).fetchall():
+                    if isinstance(val, str) and search_term.lower() in val.lower():
+                        suggestions.add(val)
+                    if len(suggestions) >= limit:
+                        break
+            if len(suggestions) >= limit:
+                break
+    return list(suggestions)

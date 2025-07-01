@@ -14,8 +14,8 @@
                         <div id="selectedFileBlock" style="display: none; width:100%;">
                             <div id="fileNameDisplay" class="mt-2"></div>
                         </div>
-                        <!-- volgende div mogelijk eruit slopen: -->
-                        <div style="margin-top: 10px">
+                        <!-- volgende div mogelijk eruit slopen als dit niet ten koste van buttonplacement kan gaan: -->
+                        <div style="margin-top: 10px;  visibility: hidden;">
                             <label>
                                 <input type="checkbox" name="deleteFile" value="true" disabled>
                             </label>
@@ -24,7 +24,7 @@
                                 style="display: none; margin-top:20px; border:0">Upload sev
                         </button>
                     </form>
-                    <p id="feedbackText" style="color: green;">{{ feedback }}</p>
+                    <p id="feedbackText" style="color: green; font-size: 0.9rem;">{{ feedback }}</p>
                 </div>
 
                 <!-- Geüploade Sev's part -->
@@ -35,8 +35,8 @@
                             <thead>
                                 <tr>
                                     <th style="border: 1px solid #ddd; padding: 8px;">Titel</th>
-                                    <th style="border: 1px solid #ddd; padding: 8px;">Publicatiedatum</th>
                                     <th style="border: 1px solid #ddd; padding: 8px;">Upload datum</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Aanmaak datum</th>
                                     <th style="border: 1px solid #ddd; padding: 8px;">Acties</th>
                                 </tr>
                             </thead>
@@ -52,17 +52,17 @@
                                             {% endif %}
                                         </td>
                                         <td style="border: 1px solid #ddd; padding: 8px;">
-                                            {% if sev.upload_date %}
-                                                {{ sev.upload_date.strftime('%d/%m/%Y') }}
+                                            {% if sev.created_date %}
+                                                {{ sev.created_date.strftime('%d/%m/%Y') }}
                                             {% else %}
                                                 onbekend
                                             {% endif %}
                                         </td>
                                         <td style="padding: 2px;">
-                                            <a href="{{ url_for('view_data', table_name=sev.title) }}" class="btn btn-primary">Bekijk tabel</a>
+                                            <a href="{{ url_for('view_data', sevilla_id=sev.id) }}" class="btn btn-primary">Bekijk tabel</a>
                                             <form method="POST" action="/upload/delete" style="display: inline;" onsubmit="return confirmDelete()">
                                                 <input type="hidden" name="delete_sev_id" value="{{ sev.id }}">
-                                                <button type="submit" class="trash-button">&#128465;</button>
+                                                <button type="submit" class="trash-button" title="Verwijderen">&#128465;</button>
                                             </form>
                                         </td>
                                     </tr>

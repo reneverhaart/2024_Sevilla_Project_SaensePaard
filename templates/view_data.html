@@ -1,33 +1,63 @@
 {% extends "base_template.html" %}
 
 {% block content %}
-    <h1>Spelersdata: {{ table_name }}</h1>
-    
-    <!-- Zoekbalk voor statistieken -->
-    <div>
-        <form action="{{ url_for('view_statistics') }}" method="get">
-            <input type="text" name="query" placeholder="Zoekterm">
-            <button type="submit">Zoeken</button>
-        </form>
-    </div>
+  <a href="{{ url_for('upload') }}" class="btn btn-secondary mb-3">&larr; Terug naar upload</a>
+  <h1>Toernooi: {{ tournament.name }}</h1>
+  <p>Geüpload op: {{ tournament.upload_date.strftime('%d-%m-%Y %H:%M:%S') }}</p>
+  <p>Gemaakt op: {{ tournament.created_date.strftime('%d-%m-%Y %H:%M:%S') }}</p>
 
-    <!-- Tabel met speler gegevens -->
-    <table border="1">
-        <thead>
-            <tr>
-                {% for column in columns %}
-                    <th>{{ column }}</th>
-                {% endfor %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in rows %}
-                <tr>
-                    {% for value in row %}
-                        <td>{{ value }}</td>
-                    {% endfor %}
-                </tr>
+  {% for rd in rounds_data %}
+    <div class="mb-4 p-3 border rounded">
+      <br><h3>Ronde {{ rd.round.round_number+1 or '1' }} - Datum:
+        {% if rd.round.date %}
+          {{ rd.round.date.strftime('%d-%m-%Y') }}
+        {% else %}
+          Niet bekend
+        {% endif %}
+      </h3>
+
+      {% if rd.games %}
+        <table class="table table-striped">
+          <thead>
+            <tr><th>Wit</th><th>Zwart</th><th>Uitslag</th></tr>
+          </thead>
+          <tbody>
+            {% for game in rd.games %}
+              <tr>
+                <td>{{ players_dict[game.white_player_id + jeugd_offset] }} (ID: {{ game.white_player_id }})</td>
+                <td>{{ players_dict[game.black_player_id + jeugd_offset] }} (ID: {{ game.black_player_id }})</td>
+                <td>{% if game.result == '1' %}
+                    1 - 0
+                  {% elif game.result == '2' %}
+                    0 - 1
+                  {% elif game.result == '3' %}
+                    1/2 - 1/2
+                  {% else %}
+                    {{ game.result or '-' }}
+                  {% endif %}
+                </td>
+              </tr>
             {% endfor %}
-        </tbody>
-    </table>
+          </tbody>
+        </table>
+      {% else %}
+        <p><em>Geen wedstrijden bekend.</em></p>
+      {% endif %}
+
+      <!--- OPTIONELE CODE
+      <h4>Afwezigen</h4>
+      {% if rd.absences %}
+        <ul>
+          {% for absence in rd.absences %}
+            <li>{{ absence.player_name or 'Onbekend' }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p><em>Geen afwezigen geregistreerd.</em></p>
+      {% endif %}
+      --->
+    </div>
+  {% else %}
+    <p><em>Geen rondes gevonden voor dit toernooi.</em></p>
+  {% endfor %}
 {% endblock %}

@@ -25,7 +25,7 @@ body {
 
 .slider-item {
     flex: none;
-    padding: 10px;
+    padding: 40px;
     box-sizing: border-box;
 }
 
@@ -674,7 +674,7 @@ a:hover {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 300px;
+    width: 150px;
     z-index: 996;
     transition: all 0.3s;
     padding: 20px;
@@ -705,7 +705,7 @@ a:hover {
 
     #main,
     #footer {
-        margin-left: 300px;
+        margin-left: 150px;
     }
 }
 

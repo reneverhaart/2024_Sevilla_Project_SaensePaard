@@ -1,277 +1,242 @@
+import ast
+import base64
+import io
 import os
-import subprocess
-import sys
-import traceback
+import logging
+import threading
+import webbrowser
 
-from sqlalchemy import MetaData, Table, inspect
-
-
-# Function to download missing packages, needs to be at start of code:
-def install_packages():
-    try:
-        # Try Pip to install packages
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'])
-    except subprocess.CalledProcessError as e:
-        print(f"Fout bij het installeren van packages: {e}")
-        sys.exit(1)
-
-
-# Call function for downloading missing packages
-install_packages()
-
-# Flask related imports
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify, abort
 from flask_socketio import SocketIO
+from matplotlib import pyplot as plt
+from sqlalchemy import inspect, MetaData, Table
 
-# Repository related imports
-from Database.repository import init_db, session, make_table, drop_old_duplicate_table, delete_old_file, get_tables, \
-    query_database, engine, delete_file_from_session
-from Database.structure import SevillaTable
+from sqlalchemy.orm import joinedload
+from Database.repository import (
+    init_db, make_table, drop_table, delete_old_file,
+    get_tables, get_table_data, get_table_names,
+    search_across_tables, specific_search_data,
+    specific_search_data_in_all_tables, get_statistics_data, engine, Session,
+)
+from Database.structure import SevillaTable, Round, Game, Absence, Player
+from DataReader.DataRead_file import parse_xml, emit_progress_update
 
-# Data-reading related imports
-from DataReader.DataRead_file import emit_progress_update, parse_xml
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Flask app configuration settings
 app = Flask(__name__)
-app.config['DATABASE'] = './saensepaard.db'
+app.config['DATABASE_PATH'] = os.path.join(os.getcwd(), 'saensepaard.db')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
-socketio = SocketIO(app)
+socketio = SocketIO(app, cors_allowed_origins='*')
 
-# Only initialize a new database if there is no database present
-if not os.path.isfile(app.config['DATABASE']):
-    init_db(socketio)  # repository
-
-# Uploadfolder needs to be connected to Data
+# Ensure upload folder exists
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'Data')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Uploadfolder must exist
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-metadata = MetaData()
-metadata.clear()
-
-### STARTING APP ROUTES ###
+# Initialize DB if not present
+if not os.path.isfile(app.config['DATABASE_PATH']):
+    init_db()
+    logger.info("Database initialized.")
 
 
-@app.route("/")
+### Routes ###
+@app.route('/')
 def home():
     return render_template('home.html')
 
 
-@app.route("/upload", methods=["POST", "GET"])
+@app.route('/upload', methods=['GET', 'POST'])
 def upload():
-    if request.method == "POST":
-        # Zorg ervoor dat de bestanden zijn geüpload
-        if 'sevFile' not in request.files:
-            return 'No file part', 400
+    if request.method == 'POST':
+        files = request.files.getlist('sevFile')
+        if not files or files[0].filename == '':
+            return 'Geen geselecteerd bestand.', 400
 
-        sev_files = request.files.getlist('sevFile')
+        emit_progress_update(socketio, 'Start verwerking...', 0)
+        total = len(files)
+        feedback = None
 
-        if not sev_files:
-            return 'No selected file', 400
+        for idx, f in enumerate(files, start=1):
+            path = os.path.join(app.config['UPLOAD_FOLDER'], f.filename)
+            f.save(path)
+            title, upload_date, created_date_xml, data = parse_xml(path)
+            delete_old_file(path)
 
-        emit_progress_update(socketio, 'Sevilla bestanden verwerken naar database...', 0)
-        total_amount_sevs = len(sev_files)
+            feedback, status = make_table(
+                sev_file=f,
+                sev_index=idx,
+                total_amount_sevs=total,
+                upload_date=upload_date,
+                created_date_xml=created_date_xml,
+                data=data
+            )
+            if status != 200:
+                return feedback, status
 
-        feedback = None  # Voor het opslaan van feedback van make_table
+            emit_progress_update(socketio, f'Verzend {idx}/{total}', int(idx/total*100))
 
-        # Verwerk elk bestand afzonderlijk
-        for sev_index, sev_file in enumerate(sev_files):
-            if sev_file.filename != '':
-                # Sla het bestand op in de Data map
-                sev_file_path = os.path.join(app.config['UPLOAD_FOLDER'], sev_file.filename)
-                sev_file.save(sev_file_path)
+        sevs = get_tables()[::-1]
+        emit_progress_update(socketio, 'Klaar!', 100)
+        return render_template('upload.html', feedback=feedback, sevs=sevs)
 
-                # Parse de XML om de benodigde data te verkrijgen
-                title, created_date, data = parse_xml(sev_file_path)
-
-                if not data:
-                    return "Geen gegevens gevonden in het XML-bestand.", 400
-
-                # Verwijder het bestand na het parsen om computer schoon te houden
-                if os.path.exists(sev_file_path):
-                    os.remove(sev_file_path)
-
-                # Maak de tabel aan met de benodigde argumenten
-                feedback, status_code = make_table(
-                    sev_file=sev_file,
-                    socketio=socketio,
-                    session=session,
-                    created_date=created_date,
-                    sev_index=sev_index + 1,  # Geef de huidige index door
-                    total_amount_sevs=total_amount_sevs,
-                    data=data
-                )
-                if status_code != 200:
-                    return feedback, status_code
-
-        # Verkrijg de tabelinformatie na verwerking van bestanden
-        all_sevs = list(get_tables(session))[::-1]
-
-        emit_progress_update(socketio, 'Verwerking voltooid!', 100)
-        return render_template('upload.html', feedback=feedback, sevs=all_sevs)
-
-    else:
-        all_sevs = list(get_tables(session))[::-1]
-        return render_template('upload.html', sevs=all_sevs)
+    sevs = get_tables()[::-1]
+    return render_template('upload.html', sevs=sevs)
 
 
-@app.route("/upload/delete", methods=['POST'])
-def delete_old_sev_file():
+@app.route('/upload/delete', methods=['POST'])
+def delete_upload():
     sev_id = request.form.get('delete_sev_id')
+    if not sev_id:
+        return 'Geen ID opgegeven.', 400
 
-    if sev_id:
-        try:
-            # Fetch the sev_file by ID
-            sev_file_to_delete = session.query(SevillaTable).get(sev_id)
-
-            if sev_file_to_delete:
-                # Bouw de tabelnaam op basis van de title
-                table_name = f"{sev_file_to_delete.title}".replace(
-                    ' ', '_').replace('.', '_')
-
-                # Verkrijg de engine uit de session
-                engine = session.bind
-
-                # Verwijder de oude tabel
-                feedback, status_code = drop_old_duplicate_table(engine, table_name)
-                if status_code != 200:
-                    return feedback, status_code
-
-                # Verwijder het record uit de database
-                session.delete(sev_file_to_delete)
-                session.commit()
-
-                feedback = 'Sev file succesvol verwijderd.'
-            else:
-                feedback = 'Sev file kan niet verwijderd worden, het is niet gevonden!'
-        except Exception as e:
-            session.rollback()
-            print(f"Error occurred while deleting sev file: {e}")
-            feedback = "Er is een fout opgetreden bij het verwijderen van het sev-bestand."
-    else:
-        feedback = "Geen Sev ID opgegeven."
-
-    # Verkrijg alle Sevilla bestanden na verwijdering
-    all_sevs = list(get_tables(session))[::-1]
-    return render_template('upload.html', feedback=feedback, sevs=all_sevs)
-
-
-def flatten_data(data, parent_key='', sep='_'):
-    """
-    Flatten the nested dictionary structure into a single-level dictionary.
-    """
-    items = []
-    for k, v in data.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.extend(flatten_data(v, new_key, sep=sep).items())
-        elif isinstance(v, list):
-            for i, sub_v in enumerate(v):
-                items.extend(flatten_data(sub_v, f"{new_key}{sep}{i}", sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
-
-@app.route("/view_data/<table_name>")
-def view_data(table_name):
     try:
-        from Database.repository import get_table_data
+        # Fetch entry
+        entry = next((s for s in get_tables() if str(s.id) == sev_id), None)
+        if not entry:
+            return 'Niet gevonden.', 404
 
-        # Verwijder speciale tekens of escape de naam als nodig
-        sanitized_table_name = f'"{table_name}"'
+        # Drop and delete
+        drop_table(entry.title)
+        from Database.repository import Session
+        session = Session()
+        session.delete(entry)
+        session.commit()
+        session.close()
 
-        # Controleer of de tabelnaam veilig is en correct
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-
-        clean_table_name = table_name.strip('"')
-
-        if clean_table_name not in tables:
-            return f"Tabel '{clean_table_name}' bestaat niet in de database.", 404
-
-        rows = get_table_data(engine, sanitized_table_name)
-        if not rows:
-            return f"Geen gegevens gevonden in de tabel '{table_name}'.", 404
-
-        metadata = MetaData()
-        table = Table(clean_table_name, metadata, autoload_with=engine)
-        columns = table.columns.keys()
-
-        return render_template('view_data.html', table_name=table_name, rows=rows, columns=columns)
-
+        feedback = 'Verwijderd.'
     except Exception as e:
-        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))
-        return f"Fout bij het ophalen van de tabel '{table_name}'.", 500
+        logger.error(f'Fout bij verwijderen: {e}')
+        feedback = 'Fout opgetreden.'
+
+    sevs = get_tables()[::-1]
+    return render_template('upload.html', feedback=feedback, sevs=sevs)
 
 
-@app.route("/view_statistics")
+@app.route('/view_data/<int:sevilla_id>')
+def view_data(sevilla_id):
+    session = Session()
+    try:
+        # Haal toernooi met gerelateerde data op (rondes, games, afwezigen, spelers)
+        tournament = session.query(SevillaTable).options(
+            joinedload(SevillaTable.rounds)
+            .joinedload(Round.games),
+            joinedload(SevillaTable.rounds)
+            .joinedload(Round.absences),
+            joinedload(SevillaTable.players)
+        ).filter(SevillaTable.id == sevilla_id).first()
+
+        if not tournament:
+            return abort(404, f"Toernooi met id {sevilla_id} niet gevonden.")
+
+        title = tournament.title
+        jeugd_offset = 10000 if not "jeugd" in title.lower() else 0
+
+        # Maak ID -> naam mapping
+        players_dict = {p.id: p.full_name for p in tournament.players}
+        print("Players dict view_data() in main.py:", players_dict)
+
+        rounds_data = []
+        print("\n")
+        for rnd in sorted(tournament.rounds, key=lambda r: r.round_number or 0):
+            games = []
+            for g in rnd.games:
+                # Zorg dat je hier de id's cast naar int als nodig
+                white_id = int(g.white_player) if g.white_player is not None else None
+                black_id = int(g.black_player) if g.black_player is not None else None
+
+                games.append({
+                    'white_player_id': white_id,
+                    'white_player_name': players_dict.get(white_id, 'Onbekend'),
+                    'black_player_id': black_id,
+                    'black_player_name': players_dict.get(black_id, 'Onbekend'),
+                    'result': g.result
+                })
+
+            absences = [{'player_name': a.player_name} for a in sorted(rnd.absences, key=lambda a: a.id)]
+
+            rounds_data.append({
+                'round': rnd,
+                'games': games,
+                'absences': absences
+            })
+            print(f"Ronde-datum volgens main.py: {rnd.date}")
+
+        return render_template(
+            'view_data.html',
+            tournament=tournament,
+            rounds_data=rounds_data,
+            jeugd_offset=jeugd_offset,
+            players_dict=players_dict
+        )
+    finally:
+        session.close()
+
+
+@app.route('/view_statistics')
 def view_statistics():
-    table_name = request.args.get('table_name', '')  # Get the table name from the query parameters
-    query = request.args.get('query', '')
+    table = request.args.get('table_name')
+    query = request.args.get('query')
+    if not table or not query:
+        return 'Parameters missen.', 400
 
-    print(f"Table Name: {table_name}")  # Debug output
-    print(f"Query: {query}")  # Debug output
-
-    if not table_name:
-        return "Geen tabelnaam opgegeven.", 400
-    if not query:
-        return "Geen zoekterm opgegeven.", 400
-
-    try:
-        from Database.repository import get_statistics_data
-
-        # Verkrijg de statistieken voor de opgegeven zoekterm in de Comp kolom
-        statistics = get_statistics_data(table_name, engine, 'Comp', query)
-        print(f"Statistics: {statistics}")  # Debug output
-        if not statistics:
-            return f"Geen statistieken gevonden voor zoekterm '{query}' in tabel '{table_name}'.", 404
-
-        return render_template('view_statistics.html', table_name=table_name, statistics=statistics)
-
-    except Exception as e:
-        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))
-        return f"Fout bij het ophalen van statistieken voor '{query}' in tabel '{table_name}'.", 500
+    stats = get_statistics_data(engine, table, 'Comp', query)
+    if not stats:
+        return 'Geen statistieken.', 404
+    return render_template('view_statistics.html', table_name=table, statistics=stats)
 
 
-@app.route("/search")
+@app.route('/search')
 def search():
-    query = request.args.get('query', '')
+    q = request.args.get('query')
+    if not q:
+        return 'Geen zoekterm.', 400
 
-    if not query:
-        return "Geen zoekterm opgegeven.", 400
-
-    try:
-        from Database.repository import search_across_tables
-
-        # Verkrijg de resultaten voor de opgegeven zoekterm
-        results = search_across_tables(engine, 'Comp', query)
-        if not results:
-            return f"Geen resultaten gevonden voor zoekterm '{query}'.", 404
-
-        return render_template('search_results.html', query=query, results=results)
-
-    except Exception as e:
-        tb_str = traceback.format_exception(etype=type(e), value=e, tb=e.__traceback__)
-        print("".join(tb_str))
-        return f"Fout bij het ophalen van resultaten voor '{query}'.", 500
+    results = search_across_tables('Comp', q)
+    if not results:
+        return 'Geen resultaten.', 404
+    return render_template('search_results.html', query=q, results=results)
 
 
-# @app.route("/b", methods=["POST", "GET"])
-# def b
-# @app.route("/c", methods=["POST", "GET"])
-# def c
-# @app.route("/d", methods=["POST", "GET"])
-# def d
-# @app.route("/e", methods=["POST", "GET"])
-# def e
-# @app.route("/f", methods=["POST", "GET"])
-# def f
+@app.route('/specific_search', methods=['GET', 'POST'])
+def specific_search():
+    tables = get_table_names()
+    if request.method == 'POST':
+        term = request.form['search_term']
+        tbl = request.form.get('table_name')
+        if tbl:
+            data = get_table_data(tbl)
+            result = specific_search_data(data, term)
+            columns = result.keys() if isinstance(result, dict) else []
+        else:
+            result = specific_search_data_in_all_tables(term)
+            columns = []
+        return render_template('specific_search.html', search_term=term, table_name=tbl, result=result, tables=tables, columns=columns)
+    return render_template('specific_search.html', tables=tables)
+
+
+@app.route('/search_suggestions')
+def search_suggestions():
+    tbl = request.args.get('table_name')
+    term = request.args.get('search_term')
+    from Database.repository import get_search_suggestions
+    return jsonify(get_search_suggestions(engine, tbl, term))
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = 5000
+    url = f'http://localhost:{port}'
+
+    # Open na 1 seconde, zodat de server opgestart is
+    threading.Timer(1.0, lambda: webbrowser.open_new_tab(url)).start()
+
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=port,
+        debug=True,
+        allow_unsafe_werkzeug=True
+    )
+
+
