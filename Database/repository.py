@@ -96,7 +96,7 @@ def make_table(sev_file, sev_index: int, total_amount_sevs: int, upload_date, cr
         for round_dict in rounds_data:
             print(f"Ronde dict keys: {list(round_dict.keys())}")
 
-            round_num = int(round_dict.get('ID', 0))
+            round_num = int(round_dict.get('ID', 0))+1
             date_str = round_dict.get('DATE')
             print(f"\ndate_str:\n{date_str}\n")
             round_date = parse_date_safe(date_str) if date_str else None

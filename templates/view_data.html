@@ -2,62 +2,366 @@
 
 {% block content %}
   <a href="{{ url_for('upload') }}" class="btn btn-secondary mb-3">&larr; Terug naar upload</a>
-  <h1>Toernooi: {{ tournament.name }}</h1>
-  <p>Geüpload op: {{ tournament.upload_date.strftime('%d-%m-%Y %H:%M:%S') }}</p>
-  <p>Gemaakt op: {{ tournament.created_date.strftime('%d-%m-%Y %H:%M:%S') }}</p>
+  <h1>Wedstrijd: {{ tournament.name }}</h1>
 
-  {% for rd in rounds_data %}
-    <div class="mb-4 p-3 border rounded">
-      <br><h3>Ronde {{ rd.round.round_number+1 or '1' }} - Datum:
-        {% if rd.round.date %}
-          {{ rd.round.date.strftime('%d-%m-%Y') }}
+  <form method="get" action="{{ url_for('view_data', sevilla_id=tournament.id) }}" class="mb-4">
+    <div>
+      <label for="player_name">Zoek spelernaam:</label>
+      <input type="text"
+             id="player_name"
+             name="player_name"
+             value="{{ request.args.get('player_name', '') }}">
+    </div>
+    <div>
+      <label for="plot_option">Wat wil je plotten?</label>
+      <select id="plot_option" name="plot_option">
+        <option value="results"
+          {% if request.args.get('plot_option') == 'results' %}selected{% endif %}>
+          Uitslagen per ronde
+        </option>
+        <option value="attendance"
+          {% if request.args.get('plot_option') == 'attendance' %}selected{% endif %}>
+          Afwezigen per ronde
+        </option>
+      </select>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox"
+               name="player_only"
+               {% if only_within %}checked{% endif %}>
+        Alleen spelers binnen dit toernooi
+      </label>
+      <label>
+        <input type="checkbox"
+               name="players_results_stacked"
+               {% if players_results_stacked %}checked{% endif %}>
+        Spelerresultaten optellen per ronde
+      </label>
+    </div>
+    <button type="submit"
+            name="submit_action"
+            value="filter_and_plot"
+            class="btn btn-primary">
+      Filter &amp; Plot
+    </button>
+  </form>
+
+  <div style="max-height: 600px; overflow-y: auto; padding-right: 1rem; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 2rem;">
+    {# Charts na filter & plot #}
+    {% if request.args.get('submit_action') == 'filter_and_plot' %}
+      {% if plot_option == 'results' %}
+        {% if players_results_stacked %}
+          <h3>Gestapelde resultaten per speler per ronde</h3>
+          <canvas id="stackedChart"></canvas>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+          <script>
+          (function(){
+            const allResults = {{ player_results | tojson }};
+            const rounds = {{ rounds_data | map(attribute='round.round_number') | list | tojson }};
+
+            // Maak een lijst van spelers en bereken totaalpunten per speler
+            const playerTotals = Object.entries(allResults).map(([player, scores]) => {
+              const total = scores.reduce((sum, val) => sum + (val ?? 0), 0);
+              return { player, total };
+            });
+
+            // Sorteer spelers van hoog naar laag op totaalpunten
+            playerTotals.sort((a, b) => b.total - a.total);
+
+            // Genereer gesorteerde spelerslijst
+            const players = playerTotals.map(p => p.player);
+
+            // Genereer één dataset per ronde met de gesorteerde volgorde
+            const datasets = rounds.map((roundNum, idx) => {
+              return {
+                label: `Ronde ${roundNum + 1}`,
+                data: players.map(p => {
+                  const val = allResults[p][idx];
+                  return val === 1 ? 1 : val === 0.5 ? 0.5 : 0;  // None = 0
+                }),
+                backgroundColor: `hsl(${(idx * 45) % 360}, 70%, 50%)`
+              };
+            });
+
+            new Chart(
+              document.getElementById('stackedChart').getContext('2d'),
+              {
+                type: 'bar',
+                data: {
+                  labels: players,
+                  datasets: datasets
+                },
+                options: {
+                  responsive: true,
+                  plugins: {
+                    title: {
+                      display: true,
+                      text: 'Gestapelde uitslagen per speler per ronde'
+                    },
+                    tooltip: {
+                      callbacks: {
+                        label: function(ctx) {
+                          const val = ctx.parsed.y;
+                          const ronde = ctx.dataset.label;
+                          const uitslagStr = val === 1 ? 'Winst (1 pt)' :
+                                             val === 0.5 ? 'Remise (½ pt)' :
+                                             val === 0 ? 'Verlies (0 pt)' : 'Geen uitslag';
+                          return `${ronde}: ${uitslagStr}`;
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    x: {
+                      stacked: true,
+                      title: {
+                        display: true,
+                        text: 'Spelers'
+                      }
+                    },
+                    y: {
+                      stacked: true,
+                      beginAtZero: true,
+                      title: {
+                        display: true,
+                        text: 'Aantal punten per ronde'
+                      },
+                      ticks: {
+                        stepSize: 0.5,
+                        beginAtZero: true,
+                        callback: function(v) {
+                          if (v === 0) return '0 pt';
+                          if (v === 0.5) return '½ pt';
+                          if (Number.isInteger(v)) return `${v} pt`;
+                          if (v % 1 === 0.5) return `${Math.floor(v)}½ pt`;
+                          return '';
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            );
+          })();
+          </script>
         {% else %}
-          Niet bekend
-        {% endif %}
-      </h3>
+          {% for pname, results in player_results.items() %}
+            {# detecteer of er overal None in results voorkomt #}
+            {% set all_absent = results | reject('ne', None) | list | length == results | length %}
+            <h3>
+              Uitslag voor “{{ pname }}” per ronde
+              {% if all_absent %}
+                - AFWEZIG binnen deze wedstrijd
+              {% else %}
+                - AANWEZIG
+              {% endif %}
+            </h3>
 
-      {% if rd.games %}
-        <table class="table table-striped">
-          <thead>
-            <tr><th>Wit</th><th>Zwart</th><th>Uitslag</th></tr>
-          </thead>
-          <tbody>
-            {% for game in rd.games %}
+            <canvas id="playerChart-{{ loop.index }}" style="width: 75%; height: 75%;"></canvas>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <script>
+            (function(){
+              const labels = {{ rounds_data|map(attribute='round.round_number')|list|tojson }};
+              const data   = {{ results|tojson }};
+              new Chart(
+                document.getElementById('playerChart-{{ loop.index }}').getContext('2d'),
+                {
+                  type: 'bar',
+                  data: {
+                    labels: labels,
+                    datasets: [{
+                      label: 'Uitslag',
+                      data: data
+                    }]
+                  },
+                  options: {
+                    scales: {
+                      y: {
+                        max: 1,
+                        beginAtZero: true,
+                        ticks: {
+                          callback: v => v === 1 ? '1‑0' : v === 0.5 ? '½‑½' : v === 0 ? '0‑1' : '',
+                          stepSize: 0.5
+                        }
+                      },
+                      x: {
+                        title: {
+                          display: true,
+                          text: 'Ronde'
+                        }
+                      }
+                    },
+                    plugins: {
+                      tooltip: {
+                        callbacks: {
+                          label: function(context) {
+                            let ronde = context.label;
+                            let uitslagValue = context.parsed.y;
+                            let uitslagStr = uitslagValue === 1 ? '1 punt' :
+                                            uitslagValue === 0.5 ? '½ punt' :
+                                            uitslagValue === 0 ? '0 punten' : 'Onbekend';
+                            return `Ronde ${parseInt(ronde) + 1}: ${uitslagStr}`;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              );
+            })();
+            </script>
+          {% endfor %}
+        {% endif %}
+      {% elif plot_option == 'attendance' %}
+        <h3>Afwezigen per ronde</h3>
+        <canvas id="attChart" style="width: 75%; height: 75%;"></canvas>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+        (function(){
+          const aRounds  = {{ rounds_data|map(attribute='round.round_number')|list|tojson }};
+          const absCounts= {{ rounds_data|map(attribute='absences')|map('length')|list|tojson }};
+          new Chart(
+            document.getElementById('attChart').getContext('2d'),
+            {
+              type: 'line',
+              data: {
+                labels: aRounds,
+                datasets: [{ label:'Aantal afwezigen', data: absCounts }]
+              },
+              options: {
+                scales: {
+                  x:{ title:{ display:true, text:'Ronde'} },
+                  y:{ title:{ display:true, text:'Afwezigen'}, beginAtZero:true }
+                }
+              }
+            }
+          );
+        })();
+        </script>
+      {% elif plot_option and not player_name_filter %}
+        <h3>Samenvatting uitslagen (per speler)</h3>
+        <canvas id="summaryChart"></canvas>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+          (function() {
+            const allResults = {{ player_results|tojson }};
+            const players = Object.keys(allResults);
+
+            // Voor elke speler, tel 1-0, ½-½, 0-1
+            const wins = [];
+            const draws = [];
+            const losses = [];
+
+            for (const pname of players) {
+              const r = allResults[pname];
+              let w = 0, d = 0, l = 0;
+              for (const v of r) {
+                if (v === 1) w++;
+                else if (v === 0.5) d++;
+                else if (v === 0) l++;
+              }
+              wins.push(w);
+              draws.push(d);
+              losses.push(l);
+            }
+
+            new Chart(
+              document.getElementById('summaryChart').getContext('2d'),
+              {
+                type: 'bar',
+                data: {
+                  labels: players,
+                  datasets: [
+                    {
+                      label: '1-0 winst',
+                      backgroundColor: '#4caf50',
+                      data: wins
+                    },
+                    {
+                      label: '½-½ remise',
+                      backgroundColor: '#ffca28',
+                      data: draws
+                    },
+                    {
+                      label: '0-1 verlies',
+                      backgroundColor: '#f44336',
+                      data: losses
+                    }
+                  ]
+                },
+                options: {
+                  responsive: true,
+                  plugins: {
+                    title: {
+                      display: true,
+                      text: 'Uitslagverdeling per speler'
+                    }
+                  },
+                  scales: {
+                    x: {
+                      stacked: true,
+                      title: {
+                        display: true,
+                        text: 'Spelers'
+                      }
+                    },
+                    y: {
+                      max: 1,  // <-- dit zorgt ervoor dat alle y-assen tot 1 lopen
+                      stacked: true,
+                      beginAtZero: true,
+                      title: {
+                        display: true,
+                        text: 'Aantal partijen'
+                      }
+                    }
+                  }
+                }
+              }
+            );
+          })();
+        </script>
+      {% endif %}
+    {% else %}
+      <p>Klik op 'Filter & Plot' om de grafieken te zien.</p>
+    {% endif %}
+  </div>
+
+
+  <p>Geüpload op: {{ tournament.upload_date.strftime('%d-%m-%Y %H:%M') }}</p>
+  <p>Gemaakt op: {{ tournament.created_date.strftime('%d-%m-%Y') }}</p>
+
+  <h2>Resultaten per ronde binnen deze wedstrijd</h2>
+  <div style="max-height: 600px; overflow-y: auto; padding-right: 1rem; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 2rem;">
+    {% for rd in rounds_data %}
+      <div class="mb-4 p-3 border rounded">
+        <h3>Ronde {{ (rd.round.round_number + 1) if rd.round.round_number is not none else 1 }} – {{ rd.round.date.strftime('%d-%m-%Y') if rd.round.date else 'Niet bekend' }}</h3>
+        {% if rd.games %}
+          <table class="table table-striped">
+            <thead>
+              <tr><th>Wit</th><th>Zwart</th><th>Uitslag</th></tr>
+            </thead>
+            <tbody>
+            {% for g in rd.games %}
               <tr>
-                <td>{{ players_dict[game.white_player_id + jeugd_offset] }} (ID: {{ game.white_player_id }})</td>
-                <td>{{ players_dict[game.black_player_id + jeugd_offset] }} (ID: {{ game.black_player_id }})</td>
-                <td>{% if game.result == '1' %}
-                    1 - 0
-                  {% elif game.result == '2' %}
-                    0 - 1
-                  {% elif game.result == '3' %}
-                    1/2 - 1/2
-                  {% else %}
-                    {{ game.result or '-' }}
-                  {% endif %}
+                <td>{{ players_dict[g.white_player_id + jeugd_offset] }} (ID: {{ g.white_player_id }})</td>
+                <td>{{ players_dict[g.black_player_id + jeugd_offset] }} (ID: {{ g.black_player_id }})</td>
+                <td>
+                  {% if g.result == '1' %}1 – 0
+                  {% elif g.result == '2' %}0 – 1
+                  {% elif g.result == '3' %}½ – ½
+                  {% else %}{{ g.result or '-' }}{% endif %}
                 </td>
               </tr>
             {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p><em>Geen wedstrijden bekend.</em></p>
-      {% endif %}
-
-      <!--- OPTIONELE CODE
-      <h4>Afwezigen</h4>
-      {% if rd.absences %}
-        <ul>
-          {% for absence in rd.absences %}
-            <li>{{ absence.player_name or 'Onbekend' }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p><em>Geen afwezigen geregistreerd.</em></p>
-      {% endif %}
-      --->
-    </div>
-  {% else %}
-    <p><em>Geen rondes gevonden voor dit toernooi.</em></p>
-  {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p><em>Geen wedstrijden bekend.</em></p>
+        {% endif %}
+      </div>
+    {% else %}
+      <p><em>Geen rondes gevonden voor dit toernooi.</em></p>
+    {% endfor %}
+  </div>
 {% endblock %}

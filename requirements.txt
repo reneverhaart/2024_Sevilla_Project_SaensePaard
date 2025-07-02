@@ -1,5 +1,6 @@
-flask==3.0.0    #Flask is needed, see "LEES_MIJ"
-flask-socketio  #Needed for setup SQLite-database with SQLAlchemy
-SQLAlchemy      #Database essential
-#lxml            #further support for reading xml-files (.sev is a .xml) next to "xml"-corepackage, see: https://www.geeksforgeeks.org/reading-and-writing-xml-files-in-python/
-datetime
+flask==3.0.0    #Flask voor koppeling front-end .html-bestanden met .py-bestanden
+eventlet        #Voor laadbalk en runnen in productie
+flask-socketio  #Voor SQLite-database met SQLAlchemy
+SQLAlchemy      #Database benodigdheden
+#lxml           #Voor .xml-bestanden inlezen (.sev is een .xml formaat), bekijk: https://www.geeksforgeeks.org/reading-and-writing-xml-files-in-python/
+datetime        #Handige datumpackage

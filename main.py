@@ -6,6 +6,7 @@ import logging
 import threading
 import webbrowser
 
+import eventlet
 from flask import Flask, render_template, request, jsonify, abort
 from flask_socketio import SocketIO
 from matplotlib import pyplot as plt
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['DATABASE_PATH'] = os.path.join(os.getcwd(), 'saensepaard.db')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
-socketio = SocketIO(app, cors_allowed_origins='*')
+socketio = SocketIO(app, async_mode='eventlet')
 
 # Ensure upload folder exists
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'Data')
@@ -130,6 +131,13 @@ def view_data(sevilla_id):
         if not tournament:
             return abort(404, f"Toernooi met id {sevilla_id} niet gevonden.")
 
+        # Ophalen van filters (ze worden ingevuld als de button wordt ingedrukt)
+        player_name_filter = request.args.get('player_name', '').strip().lower()
+        plot_option = request.args.get('plot_option', 'results')
+        action = request.args.get('submit_action')
+        filtered_players_only_within_tournament = bool(request.args.get('player_only'))
+        players_results_stacked = bool(request.args.get('players_results_stacked'))
+
         title = tournament.title
         jeugd_offset = 10000 if not "jeugd" in title.lower() else 0
 
@@ -148,9 +156,9 @@ def view_data(sevilla_id):
 
                 games.append({
                     'white_player_id': white_id,
-                    'white_player_name': players_dict.get(white_id, 'Onbekend'),
+                    'white_player_name': players_dict.get(white_id+jeugd_offset, 'Onbekend'),
                     'black_player_id': black_id,
-                    'black_player_name': players_dict.get(black_id, 'Onbekend'),
+                    'black_player_name': players_dict.get(black_id+jeugd_offset, 'Onbekend'),
                     'result': g.result
                 })
 
@@ -163,12 +171,100 @@ def view_data(sevilla_id):
             })
             print(f"Ronde-datum volgens main.py: {rnd.date}")
 
+        print(f"\ngames:\n{games}\n")
+
+        if action == 'filter_and_plot':
+            print("Filter & Plot ingedrukt.")
+            print("Gekozen spelerfilter:", player_name_filter)
+            print("Gekozen plotoptie:", plot_option)
+
+        # Ophalen van resultaten per ronde voor ingevulde spelers op filterinvoer
+        player_results = {}
+        if action == 'filter_and_plot' and player_name_filter:
+            # Matchen met behulp van substring
+            matching = {pid: name for pid, name in players_dict.items()
+                        if player_name_filter in name.lower()}
+            for pid, pname in matching.items():
+                results = []
+                for rd in rounds_data:
+                    outcome = None
+                    for game in rd['games']:
+                        if game['white_player_id'] is not None and game['white_player_id'] + jeugd_offset == pid:
+                            # Gematchede speler speelde wit
+                            if game['result'] == '1': outcome = 1
+                            elif game['result'] == '3': outcome = 0.5
+                            else: outcome = 0
+                            break
+                        if game['black_player_id'] is not None and game['black_player_id'] + jeugd_offset == pid:
+                            # Gematchede speler speelde zwart
+                            if game['result'] == '2': outcome = 1
+                            elif game['result'] == '3': outcome = 0.5
+                            else: outcome = 0
+                            break
+                    results.append(outcome)
+
+                # Alleen spelers tellen die écht meespeelden in deze ronden
+                if filtered_players_only_within_tournament:
+                    # Als True, dan:
+                    if any(r is not None for r in results):
+                        player_results[pname] = results
+                else: # Anders alle gematchede spelers weergeven ongeacht of diegene meegespeeld heeft
+                    player_results[pname] = results
+                print(f"Resultaat = '{results}', voor speler {pname} (ID {pid})")
+
+            print(f"\nplayer_results van invoer spelersnaam='{player_name_filter}': {player_results}\n")
+
+        # Alle data ophalen per persoon per ronde als geen naam is ingevuld
+        elif action == 'filter_and_plot' and not player_name_filter:
+            # Verzamel alle speler-IDs
+            player_ids = set()
+            for rd in rounds_data:
+                for g in rd['games']:
+                    player_ids.add(g['white_player_id'])
+                    player_ids.add(g['black_player_id'])
+
+            # Maak lege lijst per speler
+            player_results = {}
+            for pid in player_ids:
+                pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
+                player_results[pname] = []
+
+            # Vul per ronde de uitslag voor elke speler
+            for rd in rounds_data:
+                round_results = {pid: None for pid in player_ids}
+                for g in rd['games']:
+                    w = g['white_player_id']
+                    b = g['black_player_id']
+                    res = g['result']
+                    if res == '1':
+                        round_results[w] = 1
+                        round_results[b] = 0
+                    elif res == '2':
+                        round_results[w] = 0
+                        round_results[b] = 1
+                    elif res == '3':
+                        round_results[w] = 0.5
+                        round_results[b] = 0.5
+                    else:
+                        round_results[w] = None
+                        round_results[b] = None
+
+                for pid in player_ids:
+                    pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
+                    player_results[pname].append(round_results[pid])
+
+        print(f"\nrounds_data:\n{rounds_data}\n")
+
+        # Tot slot variabelen naar front-end sturen voor feedback
         return render_template(
             'view_data.html',
             tournament=tournament,
             rounds_data=rounds_data,
             jeugd_offset=jeugd_offset,
-            players_dict=players_dict
+            players_dict=players_dict,
+            plot_option=plot_option,
+            player_results=player_results,
+            players_results_stacked=players_results_stacked
         )
     finally:
         session.close()
@@ -231,12 +327,21 @@ if __name__ == '__main__':
     # Open na 1 seconde, zodat de server opgestart is
     threading.Timer(1.0, lambda: webbrowser.open_new_tab(url)).start()
 
+
+    """
     socketio.run(
         app,
         host='0.0.0.0',
         port=port,
         debug=True,
         allow_unsafe_werkzeug=True
+    )
+    """
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=port,
+        allow_unsafe_werkzeug=False
     )
 
 
