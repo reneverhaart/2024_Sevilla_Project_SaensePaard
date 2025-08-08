@@ -1,25 +1,116 @@
 {% extends "base_template.html" %}
 
 {% block content %}
-    <h1>Statistieken voor: {{ table_name }}</h1>
-    
-    <!-- Tabel met statistieken -->
-    <table border="1">
-        <thead>
-            <tr>
-                {% for column in statistics[0].keys() %}
-                    <th>{{ column }}</th>
-                {% endfor %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in statistics %}
-                <tr>
-                    {% for value in row.values() %}
-                        <td>{{ value }}</td>
-                    {% endfor %}
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+  <a href="{{ url_for('upload') }}" class="btn btn-secondary mb-3">&larr; Terug naar upload</a>
+  <h1>Statistieken</h1>
+
+  <form method="get" action="{{ url_for('view_statistics') }}" class="mb-4">
+    <div>
+      <label for="player_name">Zoek spelernaam:</label>
+      <input type="text"
+             id="player_name"
+             name="player_name"
+             value="{{ filters.player_name }}">
+    </div>
+    <div>
+      <label for="plot_option">Wat wil je plotten?</label>
+      <select id="plot_option" name="plot_option">
+        <option value="results" {% if filters.plot_option == 'results' %}selected{% endif %}>Uitslagen per ronde</option>
+        <option value="attendance" {% if filters.plot_option == 'attendance' %}selected{% endif %}>Afwezigen per ronde</option>
+      </select>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox"
+               name="only_active"
+               {% if filters.only_active %}checked{% endif %}>
+        Alleen actieve spelers
+      </label>
+      <label>
+        <input type="checkbox"
+               name="include_absences"
+               {% if filters.include_absences %}checked{% endif %}>
+        Absences tonen
+      </label>
+    </div>
+    <div class="mb-3">
+      <p>Selecteer toernooien:</p>
+      {% for t in tournaments %}
+        <label class="d-block">
+          <input type="checkbox"
+                 name="tournament_id"
+                 value="{{ t.id }}"
+                 {% if t.id in filters.selected_tournaments %}checked{% endif %}>
+          {{ t.title }}
+        </label>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Toon Statistieken</button>
+  </form>
+
+  {% if all_stats %}
+    {% for stats in all_stats %}
+      <section class="mb-5 p-3 border rounded">
+        <h2>{{ stats.title }}</h2>
+
+        <!-- Plot grafieken -->
+        {% if filters.plot_option == 'results' %}
+          <!-- Hier kun je Chart.js code toevoegen, vergelijkbaar met view_data -->
+        {% elif filters.plot_option == 'attendance' %}
+          <h3>Afwezigen per ronde</h3>
+          <canvas id="attChart-{{ loop.index }}"></canvas>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+          <script>
+          (function(){
+            const rounds = {{ stats.rounds_data | map(attribute='round.round_number') | list | tojson }};
+            const absCounts = {{ stats.rounds_data | map(attribute='absences') | map('length') | list | tojson }};
+            new Chart(
+              document.getElementById('attChart-{{ loop.index }}').getContext('2d'),
+              {
+                type: 'line',
+                data: { labels: rounds, datasets: [{ label:'Aantal afwezigen', data: absCounts }] },
+                options: { scales: { x:{ title:{ display:true, text:'Ronde'} }, y:{ title:{ display:true, text:'Afwezigen'}, beginAtZero:true } } }
+              }
+            );
+          })();
+          </script>
+        {% endif %}
+
+        <!-- Tabellen met partijen -->
+        <h3>Resultaten per ronde binnen dit toernooi</h3>
+        <div style="max-height: 600px; overflow-y: auto; padding-right: 1rem;">
+          {% for rd in stats.rounds_data %}
+            <div class="mb-4 p-3 border rounded">
+              <h4>Ronde {{ (rd.round.round_number + 1) if rd.round.round_number is not none else 1 }} – {{ rd.round.date.strftime('%d-%m-%Y') if rd.round.date else 'Niet bekend' }}</h4>
+              {% if rd.games %}
+                <table class="table table-striped">
+                  <thead><tr><th>Wit</th><th>Zwart</th><th>Uitslag</th></tr></thead>
+                  <tbody>
+                  {% for g in rd.games %}
+                    <tr>
+                      <td>{{ g.white_player_name }} (ID: {{ g.white_player_id }})</td>
+                      <td>{{ g.black_player_name }} (ID: {{ g.black_player_id }})</td>
+                      <td>
+                        {% if g.result == '1' %}1 – 0
+                        {% elif g.result == '2' %}0 – 1
+                        {% elif g.result == '3' %}½ – ½
+                        {% else %}{{ g.result or '-' }}{% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              {% else %}
+                <p><em>Geen wedstrijden bekend.</em></p>
+              {% endif %}
+            </div>
+          {% else %}
+            <p><em>Geen rondes gevonden voor dit toernooi.</em></p>
+          {% endfor %}
+        </div>
+      </section>
+    {% endfor %}
+  {% else %}
+    <p>Kies toernooien en filters, en klik op 'Toon Statistieken' om de grafieken en data te zien.</p>
+  {% endif %}
 {% endblock %}

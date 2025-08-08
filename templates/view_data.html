@@ -5,12 +5,24 @@
   <h1>Wedstrijd: {{ tournament.name }}</h1>
 
   <form method="get" action="{{ url_for('view_data', sevilla_id=tournament.id) }}" class="mb-4">
-    <div>
-      <label for="player_name">Zoek spelernaam:</label>
-      <input type="text"
-             id="player_name"
-             name="player_name"
-             value="{{ request.args.get('player_name', '') }}">
+    <div style="display:flex; gap:1rem; align-items:flex-end;">
+      <div>
+        <label for="player_name">Zoek spelernaam:</label>
+        <input type="text"
+               id="player_name"
+               name="player_name"
+               placeholder="Spelersnaam opzoeken"
+               value="{{ request.args.get('player_name', '') }}">
+      </div>
+
+      <div>
+        <label for="player_vs">versus:</label>
+        <input type="text"
+               id="player_vs"
+               name="player_vs"
+               placeholder="Tegenstander"
+               value="{{ request.args.get('player_vs', '') }}">
+      </div>
     </div>
     <div>
       <label for="plot_option">Wat wil je plotten?</label>
@@ -60,25 +72,35 @@
             const allResults = {{ player_results | tojson }};
             const rounds = {{ rounds_data | map(attribute='round.round_number') | list | tojson }};
 
-            // Maak een lijst van spelers en bereken totaalpunten per speler
-            const playerTotals = Object.entries(allResults).map(([player, scores]) => {
-              const total = scores.reduce((sum, val) => sum + (val ?? 0), 0);
-              return { player, total };
-            });
+            // Als selected_players_for_stack is meegegeven en niet leeg, gebruik alleen die spelers
+            const forcedPlayers = {{ selected_players_for_stack | tojson }};
+            let players;
 
-            // Sorteer spelers van hoog naar laag op totaalpunten
-            playerTotals.sort((a, b) => b.total - a.total);
+            if (forcedPlayers && forcedPlayers.length > 0) {
+              // Gebruik precies die spelers (indien in player_results aanwezig)
+              players = forcedPlayers.filter(p => allResults.hasOwnProperty(p));
+              // fallback: als niet aanwezig neem alle keys
+              if (players.length === 0) {
+                players = Object.keys(allResults);
+              }
+            } else {
+              // Origineel gedrag: sorteer op totaalpunten
+              const playerTotals = Object.entries(allResults).map(([player, scores]) => {
+                const total = scores.reduce((sum, val) => sum + (val ?? 0), 0);
+                return { player, total };
+              });
+              playerTotals.sort((a, b) => b.total - a.total);
+              players = playerTotals.map(p => p.player);
+            }
 
-            // Genereer gesorteerde spelerslijst
-            const players = playerTotals.map(p => p.player);
-
-            // Genereer één dataset per ronde met de gesorteerde volgorde
+            // Genereer één dataset per ronde met de (eventueel geforceerde) volgorde
             const datasets = rounds.map((roundNum, idx) => {
               return {
-                label: `Ronde ${roundNum + 1}`,
+                label: `Ronde ${ (roundNum !== null && roundNum !== undefined) ? (roundNum + 1) : (idx + 1) }`,
                 data: players.map(p => {
-                  const val = allResults[p][idx];
-                  return val === 1 ? 1 : val === 0.5 ? 0.5 : 0;  // None = 0
+                  const val = allResults[p] ? allResults[p][idx] : null;
+                  // Wanneer we stacked tonen, treat None als 0 (consistent met je origineel)
+                  return val === 1 ? 1 : val === 0.5 ? 0.5 : 0;
                 }),
                 backgroundColor: `hsl(${(idx * 45) % 360}, 70%, 50%)`
               };
@@ -162,8 +184,32 @@
             <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
             <script>
             (function(){
-              const labels = {{ rounds_data|map(attribute='round.round_number')|list|tojson }};
-              const data   = {{ results|tojson }};
+              // originele arrays vanuit Jinja
+              const rawLabels = {{ rounds_data|map(attribute='round.round_number')|list|tojson }};
+              const rawData   = {{ results|tojson }};
+
+              // Filter: verwijder posities waar speler niet speelde (null / undefined)
+              const labels = [];
+              const data   = [];
+              for (let i = 0; i < rawData.length; i++) {
+                const val = rawData[i];
+                if (val !== null && val !== undefined) {
+                  // bepaal label: als round_number aanwezig -> +1, anders fallback op index+1
+                  const r = rawLabels[i];
+                  const label = (r !== null && r !== undefined) ? (r + 1) : (i + 1);
+                  labels.push(label);
+                  data.push(val);
+                }
+              }
+
+              // Als er geen datapoints overblijven: toon een klein tekstje en stop
+              if (data.length === 0) {
+                const canvas = document.getElementById('playerChart-{{ loop.index }}');
+                canvas.parentNode.insertAdjacentHTML('afterend',
+                  '<p><em>Geen partijen voor deze speler in de geselecteerde ronden.</em></p>');
+                return;
+              }
+
               new Chart(
                 document.getElementById('playerChart-{{ loop.index }}').getContext('2d'),
                 {
@@ -181,7 +227,7 @@
                         max: 1,
                         beginAtZero: true,
                         ticks: {
-                          callback: v => v === 1 ? '1‑0' : v === 0.5 ? '½‑½' : v === 0 ? '0‑1' : '',
+                          callback: v => v === 1 ? '1-0' : v === 0.5 ? '½-½' : v === 0 ? '0-1' : '',
                           stepSize: 0.5
                         }
                       },
@@ -196,12 +242,12 @@
                       tooltip: {
                         callbacks: {
                           label: function(context) {
-                            let ronde = context.label;
-                            let uitslagValue = context.parsed.y;
-                            let uitslagStr = uitslagValue === 1 ? '1 punt' :
-                                            uitslagValue === 0.5 ? '½ punt' :
-                                            uitslagValue === 0 ? '0 punten' : 'Onbekend';
-                            return `Ronde ${parseInt(ronde) + 1}: ${uitslagStr}`;
+                            const rondeLabel = context.label; // al 1-based
+                            const uitslagValue = context.parsed.y;
+                            const uitslagStr = uitslagValue === 1 ? '1 punt' :
+                                               uitslagValue === 0.5 ? '½ punt' :
+                                               uitslagValue === 0 ? '0 punten' : 'Onbekend';
+                            return `Ronde ${rondeLabel}: ${uitslagStr}`;
                           }
                         }
                       }
@@ -322,6 +368,75 @@
           })();
         </script>
       {% endif %}
+
+      {# --- EXTRA: Head-to-head visualisatie (alleen als beide velden ingevuld en Filter & Plot gedrukt) --- #}
+      {% if request.args.get('player_name') and request.args.get('player_vs') %}
+        {% if head2head_summary and head2head_summary.total %}
+          <section class="mt-4 p-3 border rounded">
+            <h3>Onderlinge partijen: {{ head2head_summary.p1_name }} vs {{ head2head_summary.p2_name }}</h3>
+            <p>Overzicht: <strong>{{ head2head_summary.p1_wins }}</strong> — <strong>{{ head2head_summary.draws }}</strong> — <strong>{{ head2head_summary.p2_wins }}</strong> (p1 — remise — p2)</p>
+
+            <canvas id="h2hChart" style="max-width:600px; height:200px;"></canvas>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <script>
+              (function(){
+                const summary = {{ head2head_summary | tojson }};
+                const labels = [summary.p1_name, 'Remises', summary.p2_name];
+                const data = [summary.p1_wins, summary.draws, summary.p2_wins];
+
+                new Chart(document.getElementById('h2hChart').getContext('2d'), {
+                  type: 'bar',
+                  data: {
+                    labels: labels,
+                    datasets: [{
+                      label: 'Aantal',
+                      data: data
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    plugins: {
+                      title: { display: true, text: 'Head-to-head resultaat (aantal partijen)' }
+                    },
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                  }
+                });
+              })();
+            </script>
+
+            <h4 class="mt-3">Lijst partijen</h4>
+            <table class="table table-sm">
+              <thead><tr><th>Ronde</th><th>Datum</th><th>Wit</th><th>Zwart</th><th>Uitslag</th><th>Winnaar</th></tr></thead>
+              <tbody>
+                {% for m in head2head_matches %}
+                  <tr>
+                    <td>{{ (m.round_number + 1) if m.round_number is not none else '-' }}</td>
+                    <td>{{ m.date.strftime('%d-%m-%Y') if m.date else '-' }}</td>
+                    <td>{{ m.white_player_name }}</td>
+                    <td>{{ m.black_player_name }}</td>
+                    <td>
+                      {% if m.result == '1' %}1 – 0
+                      {% elif m.result == '2' %}0 – 1
+                      {% elif m.result == '3' %}½ – ½
+                      {% else %}{{ m.result or '-' }}{% endif %}
+                    </td>
+                    <td>
+                      {% if m.winner == 'p1' %}{{ head2head_summary.p1_name }}
+                      {% elif m.winner == 'p2' %}{{ head2head_summary.p2_name }}
+                      {% elif m.winner == 'draw' %}Remise
+                      {% else %}-{% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </section>
+        {% else %}
+          <p><em>Geen onderlinge partijen gevonden voor de gekozen spelers.</em></p>
+        {% endif %}
+      {% endif %}
+      {# --- EINDE head-to-head --- #}
+
     {% else %}
       <p>Klik op 'Filter & Plot' om de grafieken te zien.</p>
     {% endif %}

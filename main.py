@@ -42,6 +42,78 @@ if not os.path.isfile(app.config['DATABASE_PATH']):
     logger.info("Database initialized.")
 
 
+### Functies ###
+
+def compute_stats_for_tournament(tournament, player_name_filter, only_active, jeugd_offset):
+    """
+    Bouwt voor één toernooi de rounds_data en player_results op,
+    exact zoals in je /view_data.
+    """
+    # ID -> naam mapping
+    players_dict = {p.id: p.full_name for p in tournament.players}
+
+    # Ronde-data
+    rounds_data = []
+    for rnd in sorted(tournament.rounds, key=lambda r: r.round_number or 0):
+        games = []
+        for g in rnd.games:
+            w_id = int(g.white_player) if g.white_player else None
+            b_id = int(g.black_player) if g.black_player else None
+            games.append({
+                'white_player_id': w_id,
+                'white_player_name': players_dict.get(w_id + jeugd_offset, 'Onbekend'),
+                'black_player_id': b_id,
+                'black_player_name': players_dict.get(b_id + jeugd_offset, 'Onbekend'),
+                'result': g.result
+            })
+        absences = [a.player_name for a in rnd.absences]
+        rounds_data.append({'round': rnd, 'games': games, 'absences': absences})
+
+    # Spelersuitslagen per ronde
+    player_results = {}
+    # bepaal welke spelers meedoen (zoals in je tweede elif)
+    player_ids = {g['white_player_id'] for rd in rounds_data for g in rd['games']} \
+                 | {g['black_player_id'] for rd in rounds_data for g in rd['games']}
+    for pid in player_ids:
+        pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
+        player_results[pname] = []
+
+    for rd in rounds_data:
+        # init alle uitkomsten None
+        round_res = {pid: None for pid in player_ids}
+        for g in rd['games']:
+            w, b, res = g['white_player_id'], g['black_player_id'], g['result']
+            if res == '1':
+                round_res[w], round_res[b] = 1, 0
+            elif res == '2':
+                round_res[w], round_res[b] = 0, 1
+            elif res == '3':
+                round_res[w], round_res[b] = 0.5, 0.5
+        for pid in player_ids:
+            # filter op naam als gewenst
+            pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
+            if player_name_filter:
+                if player_name_filter in pname.lower():
+                    player_results[pname].append(round_res[pid])
+                else:
+                    player_results[pname].append(None)
+            else:
+                player_results[pname].append(round_res[pid])
+
+    # optioneel: drop spelers die helemaal geen data leverden
+    if only_active:
+        player_results = {
+            pn: rs for pn, rs in player_results.items()
+            if any(r is not None for r in rs)
+        }
+
+    return {
+        'title': tournament.title,
+        'rounds_data': rounds_data,
+        'player_results': player_results
+    }
+
+
 ### Routes ###
 @app.route('/')
 def home():
@@ -76,7 +148,7 @@ def upload():
             if status != 200:
                 return feedback, status
 
-            emit_progress_update(socketio, f'Verzend {idx}/{total}', int(idx/total*100))
+            emit_progress_update(socketio, f'Verzend {idx}/{total}', int(idx / total * 100))
 
         sevs = get_tables()[::-1]
         emit_progress_update(socketio, 'Klaar!', 100)
@@ -133,6 +205,7 @@ def view_data(sevilla_id):
 
         # Ophalen van filters (ze worden ingevuld als de button wordt ingedrukt)
         player_name_filter = request.args.get('player_name', '').strip().lower()
+        player_vs_filter = request.args.get('player_vs', '').strip().lower()
         plot_option = request.args.get('plot_option', 'results')
         action = request.args.get('submit_action')
         filtered_players_only_within_tournament = bool(request.args.get('player_only'))
@@ -156,9 +229,9 @@ def view_data(sevilla_id):
 
                 games.append({
                     'white_player_id': white_id,
-                    'white_player_name': players_dict.get(white_id+jeugd_offset, 'Onbekend'),
+                    'white_player_name': players_dict.get(white_id + jeugd_offset, 'Onbekend'),
                     'black_player_id': black_id,
-                    'black_player_name': players_dict.get(black_id+jeugd_offset, 'Onbekend'),
+                    'black_player_name': players_dict.get(black_id + jeugd_offset, 'Onbekend'),
                     'result': g.result
                 })
 
@@ -172,6 +245,17 @@ def view_data(sevilla_id):
             print(f"Ronde-datum volgens main.py: {rnd.date}")
 
         print(f"\ngames:\n{games}\n")
+
+        # Voor het geval we head-to-head moeten tonen:
+        head2head_matches = []  # lijst met gevonden partijen tussen de twee spelers
+        head2head_summary = {  # eenvoudige tellingen
+            'p1_name': None,
+            'p2_name': None,
+            'p1_wins': 0,
+            'p2_wins': 0,
+            'draws': 0,
+            'total': 0
+        }
 
         if action == 'filter_and_plot':
             print("Filter & Plot ingedrukt.")
@@ -191,15 +275,21 @@ def view_data(sevilla_id):
                     for game in rd['games']:
                         if game['white_player_id'] is not None and game['white_player_id'] + jeugd_offset == pid:
                             # Gematchede speler speelde wit
-                            if game['result'] == '1': outcome = 1
-                            elif game['result'] == '3': outcome = 0.5
-                            else: outcome = 0
+                            if game['result'] == '1':
+                                outcome = 1
+                            elif game['result'] == '3':
+                                outcome = 0.5
+                            else:
+                                outcome = 0
                             break
                         if game['black_player_id'] is not None and game['black_player_id'] + jeugd_offset == pid:
                             # Gematchede speler speelde zwart
-                            if game['result'] == '2': outcome = 1
-                            elif game['result'] == '3': outcome = 0.5
-                            else: outcome = 0
+                            if game['result'] == '2':
+                                outcome = 1
+                            elif game['result'] == '3':
+                                outcome = 0.5
+                            else:
+                                outcome = 0
                             break
                     results.append(outcome)
 
@@ -208,7 +298,7 @@ def view_data(sevilla_id):
                     # Als True, dan:
                     if any(r is not None for r in results):
                         player_results[pname] = results
-                else: # Anders alle gematchede spelers weergeven ongeacht of diegene meegespeeld heeft
+                else:  # Anders alle gematchede spelers weergeven ongeacht of diegene meegespeeld heeft
                     player_results[pname] = results
                 print(f"Resultaat = '{results}', voor speler {pname} (ID {pid})")
 
@@ -229,7 +319,7 @@ def view_data(sevilla_id):
                 pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
                 player_results[pname] = []
 
-            # Vul per ronde de uitslag voor elke speler
+            # Vul per ronde de uitslag in voor elke speler
             for rd in rounds_data:
                 round_results = {pid: None for pid in player_ids}
                 for g in rd['games']:
@@ -253,7 +343,131 @@ def view_data(sevilla_id):
                     pname = players_dict.get(pid + jeugd_offset, f"Speler {pid}")
                     player_results[pname].append(round_results[pid])
 
+        if action == 'filter_and_plot' and player_vs_filter:
+            matching_vs = {pid: name for pid, name in players_dict.items() if player_vs_filter in name.lower()}
+            # voeg resultaten voor matching_vs toe aan player_results (indien nog niet aanwezig)
+            for pid, pname in matching_vs.items():
+                if pname in player_results:
+                    # al aanwezig (bijv. als beide filters matchen op dezelfde persoon) -> skip
+                    continue
+                results_vs = []
+                for rd in rounds_data:
+                    outcome = None
+                    for game in rd['games']:
+                        if game['white_player_id'] is not None and game['white_player_id'] + jeugd_offset == pid:
+                            if game['result'] == '1':
+                                outcome = 1
+                            elif game['result'] == '3':
+                                outcome = 0.5
+                            else:
+                                outcome = 0
+                            break
+                        if game['black_player_id'] is not None and game['black_player_id'] + jeugd_offset == pid:
+                            if game['result'] == '2':
+                                outcome = 1
+                            elif game['result'] == '3':
+                                outcome = 0.5
+                            else:
+                                outcome = 0
+                            break
+                    results_vs.append(outcome)
+
+                if filtered_players_only_within_tournament:
+                    if any(r is not None for r in results_vs):
+                        player_results[pname] = results_vs
+                else:
+                    player_results[pname] = results_vs
+                print(f"(vs) Resultaat = '{results_vs}', voor speler {pname} (ID {pid})")
+
+        # Alleen versus-versie zoeken als de knop is ingedrukt en beide velden zijn ingevuld
+        if action == 'filter_and_plot' and player_name_filter and player_vs_filter:
+            # Zoek naar spelers die bij de zoekstrings passen (zelfde matching als elders)
+            matching_p1 = {pid: name for pid, name in players_dict.items() if player_name_filter in name.lower()}
+            matching_p2 = {pid: name for pid, name in players_dict.items() if player_vs_filter in name.lower()}
+
+            # Sla meteen namen op (samenvoegen als meerdere matches)
+            if matching_p1:
+                head2head_summary['p1_name'] = ', '.join(matching_p1.values())
+            if matching_p2:
+                head2head_summary['p2_name'] = ', '.join(matching_p2.values())
+
+            # Als we geen matches hebben voor beide, niets verder doen
+            if matching_p1 and matching_p2:
+                p1_pids = set(matching_p1.keys())
+                p2_pids = set(matching_p2.keys())
+
+                # Doorloop alle ronden en hun partijen
+                for rd in rounds_data:
+                    round_number = getattr(rd['round'], 'round_number', None)
+                    round_date = getattr(rd['round'], 'date', None)
+                    for g in rd['games']:
+                        w = g['white_player_id']
+                        b = g['black_player_id']
+                        res = g.get('result')
+
+                        # skip incomplete partijen
+                        if w is None or b is None:
+                            continue
+
+                        # Check of deze partij tussen p1 en p2 is (orde onafhankelijk)
+                        is_p1_white = (w + jeugd_offset in p1_pids)
+                        is_p2_white = (w + jeugd_offset in p2_pids)
+                        is_p1_black = (b + jeugd_offset in p1_pids)
+                        is_p2_black = (b + jeugd_offset in p2_pids)
+
+                        # Scenario p1 wit & p2 zwart
+                        if (is_p1_white and is_p2_black) or (is_p2_white and is_p1_black):
+                            # bepaal wie wit was en dus resultaat-relatie
+                            p1_is_white = is_p1_white
+                            # resultaat evaluatie:
+                            if res == '1':
+                                # wit won
+                                if p1_is_white:
+                                    head2head_summary['p1_wins'] += 1
+                                    winner = 'p1'
+                                else:
+                                    head2head_summary['p2_wins'] += 1
+                                    winner = 'p2'
+
+                            elif res == '2':
+                                # zwart won
+                                if p1_is_white:
+                                    head2head_summary['p2_wins'] += 1
+                                    winner = 'p2'
+                                else:
+                                    head2head_summary['p1_wins'] += 1
+                                    winner = 'p1'
+
+                            elif res == '3':
+                                head2head_summary['draws'] += 1
+                                winner = 'draw'
+                            else:
+                                winner = 'unknown'
+
+                            head2head_summary['total'] += 1
+
+                            # Voeg partij toe (bewaar in overzichtsvriendelijke vorm)
+                            head2head_matches.append({
+                                'round_number': round_number,
+                                'date': round_date,
+                                'white_player_name': g['white_player_name'],
+                                'black_player_name': g['black_player_name'],
+                                'result': res,
+                                'winner': winner
+                            })
+
         print(f"\nrounds_data:\n{rounds_data}\n")
+
+        # Variabele voor front-end
+        selected_players_for_stack = []
+        if action == 'filter_and_plot' and player_name_filter and player_vs_filter:
+            # kies eerst matches uit players_dict op basis van filters (zoals hierboven)
+            matching_p1 = [name for pid, name in players_dict.items() if player_name_filter in name.lower()]
+            matching_p2 = [name for pid, name in players_dict.items() if player_vs_filter in name.lower()]
+            # keep order: eerst p1 matches, dan p2 (maar dedupe)
+            for n in matching_p1 + matching_p2:
+                if n not in selected_players_for_stack:
+                    selected_players_for_stack.append(n)
 
         # Tot slot variabelen naar front-end sturen voor feedback
         return render_template(
@@ -264,35 +478,79 @@ def view_data(sevilla_id):
             players_dict=players_dict,
             plot_option=plot_option,
             player_results=player_results,
-            players_results_stacked=players_results_stacked
+            players_results_stacked=players_results_stacked,
+            head2head_matches=head2head_matches,
+            head2head_summary=head2head_summary,
+            selected_players_for_stack=selected_players_for_stack
         )
     finally:
         session.close()
 
 
-@app.route('/view_statistics')
+@app.route('/view_statistics', methods=['GET'])
 def view_statistics():
-    table = request.args.get('table_name')
-    query = request.args.get('query')
-    if not table or not query:
-        return 'Parameters missen.', 400
+    session = Session()
+    try:
+        # Toernooikeuze
+        # vanuit je front-end checkboxes: <input type="checkbox" name="tournament_id" value="{{ t.id }}">
+        tournament_ids = request.args.getlist('tournament_id', type=int)
+        q = session.query(SevillaTable)
+        if tournament_ids:
+            q = q.filter(SevillaTable.id.in_(tournament_ids))
+        tournaments = q.options(
+            joinedload(SevillaTable.rounds)
+            .joinedload(Round.games),
+            joinedload(SevillaTable.rounds)
+            .joinedload(Round.absences),
+            joinedload(SevillaTable.players)
+        ).all()
+        if not tournaments:
+            return abort(404, "Geen toernooien gevonden (check je selectie).")
 
-    stats = get_statistics_data(engine, table, 'Comp', query)
-    if not stats:
-        return 'Geen statistieken.', 404
-    return render_template('view_statistics.html', table_name=table, statistics=stats)
+        # Filters en opties opvragen
+        player_name_filter = request.args.get('player_name', '').strip().lower()
+        plot_option = request.args.get('plot_option', 'results')
+        only_active = bool(request.args.get('only_active'))
+        include_absences = bool(request.args.get('include_absences'))
+
+        # Voor elk toernooi stats berekenen ---
+        all_stats = []
+        for t in tournaments:
+            title = t.title
+            jeugd_offset = 10000 if not "jeugd" in title.lower() else 0
+
+            stats = compute_stats_for_tournament(
+                t,
+                player_name_filter=player_name_filter,
+                only_active=only_active,
+                jeugd_offset=jeugd_offset
+            )
+            all_stats.append(stats)
+
+        # na het ophalen van tournament_ids
+        filters = {
+            'player_name': player_name_filter,
+            'plot_option': plot_option,
+            'only_active': only_active,
+            'include_absences': include_absences,
+            'selected_tournaments': tournament_ids
+        }
+        return render_template(
+            'view_statistics.html',
+            tournaments=tournaments,
+            all_stats=all_stats,
+            filters=filters
+        )
+    finally:
+        session.close()
 
 
-@app.route('/search')
-def search():
-    q = request.args.get('query')
-    if not q:
-        return 'Geen zoekterm.', 400
-
-    results = search_across_tables('Comp', q)
-    if not results:
-        return 'Geen resultaten.', 404
-    return render_template('search_results.html', query=q, results=results)
+@app.route('/make_file')
+def make_file():
+    return render_template(
+        'make_file.html',
+        tournaments=tournaments
+    )
 
 
 @app.route('/specific_search', methods=['GET', 'POST'])
@@ -308,7 +566,8 @@ def specific_search():
         else:
             result = specific_search_data_in_all_tables(term)
             columns = []
-        return render_template('specific_search.html', search_term=term, table_name=tbl, result=result, tables=tables, columns=columns)
+        return render_template('specific_search.html', search_term=term, table_name=tbl, result=result, tables=tables,
+                               columns=columns)
     return render_template('specific_search.html', tables=tables)
 
 
@@ -327,7 +586,6 @@ if __name__ == '__main__':
     # Open na 1 seconde, zodat de server opgestart is
     threading.Timer(1.0, lambda: webbrowser.open_new_tab(url)).start()
 
-
     """
     socketio.run(
         app,
@@ -343,5 +601,3 @@ if __name__ == '__main__':
         port=port,
         allow_unsafe_werkzeug=False
     )
-
-
